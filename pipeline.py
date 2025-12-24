@@ -16,18 +16,18 @@ RISK_THRESHOLDS = {
 
 
 PL_LABELS = {
-    "Revenue": ["revenue"],
-    "Net Profit": ["profit for the year"],
-    "PBT": ["profit before tax"],
-    "Interest Expense": ["finance cost"],
-    "Depreciation": ["depreciation"]
+    "Revenue": ["revenue", "total income", "turnover"],
+    "Net Profit": ["net profit", "profit after tax", "pat", "profit for the year"],
+    "PBT": ["profit before tax", "pbt"],
+    "Interest Expense": ["finance cost", "interest"],
+    "Depreciation": ["depreciation", "amortisation"]
 }
 
 BS_LABELS = {
-    "Current Assets": ["total current assets"],
-    "Current Liabilities": ["total current liabilities"],
+    "Current Assets": ["current assets"],
+    "Current Liabilities": ["current liabilities"],
     "Total Assets": ["total assets"],
-    "Net Worth": ["total equity"]
+    "Net Worth": ["net worth", "equity", "shareholders"]
 }
 
 
@@ -37,7 +37,10 @@ def parse_number(x):
     x = x.replace(",", "").strip()
     if x.startswith("(") and x.endswith(")"):
         return -float(x[1:-1])
-    return float(x)
+    try:
+        return float(x)
+    except Exception:
+        return None
 
 
 def assign_risk_flag(value, metric):
@@ -56,29 +59,9 @@ def assign_risk_flag(value, metric):
 def find_consolidated_section(pdf):
     for i, page in enumerate(pdf.pages):
         txt = page.extract_text()
-        if txt and "consolidated financial statements" in txt.lower():
+        if txt and "consolidated" in txt.lower():
             return i
-    return None
-
-
-def extract_rupee_crore_tables(pdf, start_page, max_pages=40):
-    valid_tables = []
-
-    for p in range(start_page, min(start_page + max_pages, len(pdf.pages))):
-        page = pdf.pages[p]
-        text = page.extract_text()
-        if not text:
-            continue
-
-        header = text.lower()
-        if "₹ crore" not in header and "rs. crore" not in header:
-            continue
-
-        tables = page.extract_tables()
-        if tables:
-            valid_tables.extend(tables)
-
-    return valid_tables
+    return 0  
 
 
 def extract_from_tables(tables, label_map):
@@ -92,12 +75,40 @@ def extract_from_tables(tables, label_map):
             label = str(row[0]).lower().strip()
 
             for metric, keywords in label_map.items():
+                if metric in results:
+                    continue
                 if any(k in label for k in keywords):
                     val = row[-1]
                     if isinstance(val, str) and re.search(r"\d", val):
-                        results[metric] = parse_number(val)
-                        break
+                        parsed = parse_number(val)
+                        if parsed is not None:
+                            results[metric] = parsed
+    return results
 
+
+def extract_from_text(pdf, label_map):
+    """
+    Fallback extraction when tables fail.
+    Extremely important for real annual reports.
+    """
+    results = {}
+
+    for page in pdf.pages:
+        text = page.extract_text()
+        if not text:
+            continue
+
+        lines = text.lower().split("\n")
+        for line in lines:
+            for metric, keywords in label_map.items():
+                if metric in results:
+                    continue
+                if any(k in line for k in keywords):
+                    nums = re.findall(r"\(?\d[\d,]*\)?", line)
+                    if nums:
+                        parsed = parse_number(nums[-1])
+                        if parsed is not None:
+                            results[metric] = parsed
     return results
 
 
@@ -106,23 +117,25 @@ def run_financial_analysis(pdf_path):
 
     with pdfplumber.open(pdf_path) as pdf:
         start_page = find_consolidated_section(pdf)
-        if start_page is None:
-            raise ValueError("Consolidated Financial Statements section not found")
 
-        financial_data["Statement Type"] = "Consolidated (₹ crore)"
-
-        tables = extract_rupee_crore_tables(pdf, start_page)
-        if not tables:
-            raise ValueError("No ₹ crore consolidated tables found")
+        tables = []
+        for p in range(start_page, min(start_page + 40, len(pdf.pages))):
+            page_tables = pdf.pages[p].extract_tables()
+            if page_tables:
+                tables.extend(page_tables)
 
         pl_data = extract_from_tables(tables, PL_LABELS)
         bs_data = extract_from_tables(tables, BS_LABELS)
 
+        if not pl_data:
+            pl_data = extract_from_text(pdf, PL_LABELS)
+        if not bs_data:
+            bs_data = extract_from_text(pdf, BS_LABELS)
+
         financial_data.update(pl_data)
         financial_data.update(bs_data)
 
-       
-        financial_data["Total Debt"] = 0.0
+        financial_data.setdefault("Total Debt", 0.0)
 
     financial_data["EBIT"] = (
         financial_data.get("PBT", 0) + financial_data.get("Interest Expense", 0)
@@ -132,12 +145,12 @@ def run_financial_analysis(pdf_path):
     )
     financial_data["Principal Repayment"] = 0.0
 
-   
     ca = financial_data.get("Current Assets", 0)
     cl = financial_data.get("Current Liabilities", 0)
     nw = financial_data.get("Net Worth", 0)
     td = financial_data.get("Total Debt", 0)
     ta = financial_data.get("Total Assets", nw + td)
+
     rev = financial_data.get("Revenue", 0)
     np = financial_data.get("Net Profit", 0)
     ebit = financial_data.get("EBIT", 0)
@@ -146,7 +159,6 @@ def run_financial_analysis(pdf_path):
 
     capital_employed = nw + td if nw > 0 else 0
 
-   
     ratios = {
         "Current Ratio": ca / cl if cl > 0 else None,
         "Debt-Equity Ratio": td / nw if nw > 0 else None,
@@ -158,8 +170,6 @@ def run_financial_analysis(pdf_path):
         "Net Profit Margin": np / rev if rev > 0 else None,
     }
 
-    risk_flags = {
-        k: assign_risk_flag(v, k) for k, v in ratios.items()
-    }
+    risk_flags = {k: assign_risk_flag(v, k) for k, v in ratios.items()}
 
     return financial_data, ratios, risk_flags
