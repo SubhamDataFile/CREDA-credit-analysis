@@ -20,7 +20,7 @@ def generate_credit_memo(
     risk_output,
     commentary,
     company_name="Company",
-    period="FY",
+    period="FY25",
     logo_path=None,
     output_path="credit_memo.pdf"
 ):
@@ -203,5 +203,9 @@ def generate_credit_memo(
         )
     ))
 
+    if commentary.get("ai_enhanced"):
+       footer += " | Commentary language enhanced using AI"
+
+
     doc.build(story)
-    return output_path
+    return output_path 
