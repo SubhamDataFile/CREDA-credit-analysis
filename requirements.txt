@@ -4,6 +4,6 @@ numpy
 openpyxl
 pdfplumber
 reportlab
-openai
+openai>=1.2.0
 python-dateutil
 
