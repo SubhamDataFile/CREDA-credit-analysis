@@ -36,7 +36,7 @@ st.caption(
 )
 
 st.set_page_config(page_title="CREDA – AI Credit Analysis", layout="centered")
-st.title("📊 CREDA – AI-Powered Credit Analysis")
+st.title(" CREDA – AI-Powered Credit Analysis")
 st.caption("Rule-based credit engine with optional AI-assisted commentary")
 
 
@@ -100,7 +100,7 @@ if uploaded_file:
 
     st.success("Annual report uploaded")
 
-    st.markdown("### 🏢 Company Logo (Optional)")
+    st.markdown("###  Company Logo (Optional)")
     logo_file = st.file_uploader(
         "Upload Company Logo (PNG / JPG)",
         type=["png", "jpg", "jpeg"]
@@ -129,7 +129,7 @@ if st.session_state.analysis_done:
         financials.setdefault(field, 0)
 
   
-    st.markdown("## ✍️ Analyst Adjustments")
+    st.markdown("##  Analyst Adjustments")
     st.caption("Overrides trigger live recomputation")
 
     with st.expander("Edit Financial Inputs"):
@@ -158,7 +158,7 @@ if st.session_state.analysis_done:
         balance_sheet=balance_sheet_context
     )
 
-    st.markdown("## 🧠 Credit Commentary")
+    st.markdown("##  Credit Commentary")
     use_ai = st.toggle(
         "Enhance commentary using AI (language only)",
         value=False
@@ -169,6 +169,8 @@ if st.session_state.analysis_done:
         ratios=ratios,
         financials=financials
     )
+
+    use_ai = False
 
     if use_ai:
         try:
@@ -195,20 +197,20 @@ if st.session_state.analysis_done:
     )
 
   
-    st.markdown("## 📊 Credit Snapshot")
+    st.markdown("##  Credit Snapshot")
     c1, c2, c3 = st.columns(3)
     c1.metric("Revenue", f"₹ {safe_number(financials['Revenue']):,.0f}")
     c2.metric("Net Profit", f"₹ {safe_number(financials['Net Profit']):,.0f}")
     c3.metric("EBITDA", f"₹ {safe_number(financials['EBITDA']):,.0f}")
 
-    st.markdown("### 📈 Key Ratios")
+    st.markdown("###  Key Ratios")
     r1, r2, r3 = st.columns(3)
     r1.metric("DSCR", "NA" if ratios["DSCR"] is None else f"{ratios['DSCR']:.2f}")
     r2.metric("ROCE", "NA" if ratios["ROCE"] is None else f"{ratios['ROCE']*100:.1f}%")
     r3.metric("ROA", "NA" if ratios["ROA"] is None else f"{ratios['ROA']*100:.1f}%")
 
   
-    st.markdown("## 🚦 Credit Risk Assessment")
+    st.markdown("##  Credit Risk Assessment")
     icon = {"LOW": "🟢", "MODERATE": "🟠", "HIGH": "🔴"}
     st.markdown(f"### {icon[risk_output['overall_risk']]} {risk_output['overall_risk']} RISK")
 
@@ -225,7 +227,7 @@ if st.session_state.analysis_done:
         )
 
    
-    st.markdown("### 🧾 Audit Trail")
+    st.markdown("###  Audit Trail")
     audit_df = pd.DataFrame({
         "Metric": OVERRIDABLE_FIELDS,
         "Extracted": [extracted.get(k, 0) for k in OVERRIDABLE_FIELDS],
