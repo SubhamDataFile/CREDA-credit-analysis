@@ -18,12 +18,11 @@ Commentary:
 """
 
     response = client.responses.create(
-        model="gpt-4.1-mini",
+        model="gpt-3.5-turbo",
         input=prompt,
         temperature=0.3,
     )
 
-    
     text = response.output_text
     if not text:
         raise RuntimeError("Empty response from OpenAI")
