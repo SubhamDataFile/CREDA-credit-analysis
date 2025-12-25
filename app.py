@@ -10,9 +10,6 @@ import math
 import os
 
 
-# =========================
-# Config
-# =========================
 OVERRIDABLE_FIELDS = [
     "Revenue",
     "Net Profit",
@@ -28,14 +25,22 @@ OVERRIDABLE_FIELDS = [
     "Principal Repayment"
 ]
 
+st.info(
+    "📌 Workflow: Upload annual report → Review extracted figures → "
+    "Adjust key financials if needed → Ratios, risk, and credit memo update live."
+
+)
+
+st.caption(
+    "AI improves language only. All credit logic, ratios, and conclusions remain rule-based."
+)
+
 st.set_page_config(page_title="CREDA – AI Credit Analysis", layout="centered")
 st.title("📊 CREDA – AI-Powered Credit Analysis")
 st.caption("Rule-based credit engine with optional AI-assisted commentary")
 
 
-# =========================
-# Session State
-# =========================
+
 if "analysis_done" not in st.session_state:
     st.session_state.analysis_done = False
 
@@ -46,9 +51,6 @@ if "adjusted_financials" not in st.session_state:
     st.session_state.adjusted_financials = {}
 
 
-# =========================
-# Helpers
-# =========================
 def safe_number(x):
     if x is None or (isinstance(x, float) and math.isnan(x)):
         return 0
@@ -86,9 +88,6 @@ def recompute_ratios(f):
     }
 
 
-# =========================
-# File Uploads
-# =========================
 uploaded_file = st.file_uploader("Upload Annual Report (PDF)", type=["pdf"])
 logo_path = None
 
@@ -122,9 +121,6 @@ if uploaded_file:
         st.success("Analysis completed")
 
 
-# =========================
-# Main Analysis Section
-# =========================
 if st.session_state.analysis_done:
     extracted = st.session_state.extracted
     financials = extracted.copy()
@@ -132,7 +128,7 @@ if st.session_state.analysis_done:
     for field in OVERRIDABLE_FIELDS:
         financials.setdefault(field, 0)
 
-    # -------- Analyst Overrides --------
+  
     st.markdown("## ✍️ Analyst Adjustments")
     st.caption("Overrides trigger live recomputation")
 
@@ -152,7 +148,6 @@ if st.session_state.analysis_done:
     financials.update(st.session_state.adjusted_financials)
     ratios = recompute_ratios(financials)
 
-    # -------- Risk Engine --------
     balance_sheet_context = {
         "total_debt": financials.get("Total Debt", 0),
         "interest_expense": financials.get("Interest Expense", 0)
@@ -163,7 +158,6 @@ if st.session_state.analysis_done:
         balance_sheet=balance_sheet_context
     )
 
-    # -------- Commentary --------
     st.markdown("## 🧠 Credit Commentary")
     use_ai = st.toggle(
         "Enhance commentary using AI (language only)",
@@ -183,9 +177,12 @@ if st.session_state.analysis_done:
             st.caption("✳ Commentary language enhanced using AI.")
         except Exception:
             commentary["ai_enhanced"] = False
-            st.warning("AI enhancement failed. Showing rule-based commentary.")
+            st.info(
+              "AI language enhancement is currently unavailable. "
+              "The credit commentary shown is fully rule-based and unaffected."
+    )
 
-    # -------- Credit Memo --------
+
     pdf_path = generate_credit_memo(
         financials=financials,
         ratios=ratios,
@@ -197,7 +194,7 @@ if st.session_state.analysis_done:
         output_path="credit_memo.pdf"
     )
 
-    # -------- Snapshot --------
+  
     st.markdown("## 📊 Credit Snapshot")
     c1, c2, c3 = st.columns(3)
     c1.metric("Revenue", f"₹ {safe_number(financials['Revenue']):,.0f}")
@@ -210,7 +207,7 @@ if st.session_state.analysis_done:
     r2.metric("ROCE", "NA" if ratios["ROCE"] is None else f"{ratios['ROCE']*100:.1f}%")
     r3.metric("ROA", "NA" if ratios["ROA"] is None else f"{ratios['ROA']*100:.1f}%")
 
-    # -------- Risk Table --------
+  
     st.markdown("## 🚦 Credit Risk Assessment")
     icon = {"LOW": "🟢", "MODERATE": "🟠", "HIGH": "🔴"}
     st.markdown(f"### {icon[risk_output['overall_risk']]} {risk_output['overall_risk']} RISK")
@@ -219,7 +216,6 @@ if st.session_state.analysis_done:
     risk_df["value"] = risk_df["value"].apply(lambda x: "NA" if x is None else round(x, 3))
     st.dataframe(risk_df, use_container_width=True)
 
-    # -------- Download --------
     with open(pdf_path, "rb") as f:
         st.download_button(
             "📥 Download Credit Memo (PDF)",
@@ -228,7 +224,7 @@ if st.session_state.analysis_done:
             mime="application/pdf"
         )
 
-    # -------- Audit Trail --------
+   
     st.markdown("### 🧾 Audit Trail")
     audit_df = pd.DataFrame({
         "Metric": OVERRIDABLE_FIELDS,
