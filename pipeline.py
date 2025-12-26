@@ -2,205 +2,129 @@ import pdfplumber
 import re
 import math
 
-RISK_THRESHOLDS = {
-    "Current Ratio": {"green": 1.5, "amber": 1.0},
-    "Debt-Equity Ratio": {"green": 1.0, "amber": 2.0},
-    "Interest Coverage Ratio": {"green": 3.0, "amber": 1.5},
-    "DSCR": {"green": 1.25, "amber": 1.0},
-    "ROCE": {"green": 0.15, "amber": 0.10},
-    "ROA": {"green": 0.08, "amber": 0.04},
-}
+
 
 PL_LABELS = {
-    "Revenue": ["revenue from operations", "total income", "revenue"],
-    "Net Profit": ["profit for the year", "profit after tax", "pat"],
+    "Revenue": ["revenue from operations", "total income"],
+    "Net Profit": ["profit for the year"],
     "PBT": ["profit before tax"],
     "Interest Expense": ["finance cost"],
-    "Depreciation": ["depreciation", "amortisation"],
+    "Depreciation": ["depreciation and amortization"],
 }
 
 BS_LABELS = {
     "Current Assets": ["total current assets"],
     "Current Liabilities": ["total current liabilities"],
     "Total Assets": ["total assets"],
-    "Net Worth": ["total equity"],
+    "Net Worth": ["total equity attributable"],
 }
 
 STATEMENT_HEADERS = {
-    "balance_sheet": ["balance sheet"],
-    "profit_loss": ["statement of profit", "statement of profit and loss"],
+    "balance_sheet": [
+        "consolidated balance sheet",
+        "consolidated statement of financial position",
+    ],
+    "profit_loss": [
+        "consolidated statement of profit and loss",
+        "consolidated statement of profit",
+    ],
 }
 
 STOP_HEADERS = [
     "notes to the consolidated financial statements",
     "notes forming part",
-    "independent auditor",
 ]
 
-def parse_number(x):
-    if not isinstance(x, str):
+
+def parse_number(text):
+    if not isinstance(text, str):
         return None
-    x = x.replace(",", "").strip()
-    if x.startswith("(") and x.endswith(")"):
-        return -float(x[1:-1])
+    text = text.replace(",", "").strip()
+    if text.startswith("(") and text.endswith(")"):
+        return -float(text[1:-1])
     try:
-        return float(x)
-    except Exception:
+        return float(text)
+    except:
         return None
 
 
-def assign_risk_flag(value, metric):
-    if value is None or math.isnan(value):
-        return "NA"
-    t = RISK_THRESHOLDS.get(metric)
-    if not t:
-        return "NA"
-    if value >= t["green"]:
-        return "GREEN"
-    elif value >= t["amber"]:
-        return "AMBER"
-    return "RED"
-
-def scan_document(pdf):
+def scan_pages(pdf):
     return [
-        {"page": i, "text": (page.extract_text() or "").lower()}
-        for i, page in enumerate(pdf.pages)
+        {"page": i, "text": (p.extract_text() or "").lower()}
+        for i, p in enumerate(pdf.pages)
     ]
 
 
-def detect_statement_pages(pages, keywords):
-    return [
-        p["page"] for p in pages if any(k in p["text"] for k in keywords)
-    ]
+def find_statement_pages(pages, headers):
+    return [p["page"] for p in pages if any(h in p["text"] for h in headers)]
 
 
-def infer_statement_range(start_pages, pages):
-    if not start_pages:
-        return []
-    start = start_pages[0]
-    end = len(pages) - 1
-    for p in pages[start + 1 :]:
-        if any(stop in p["text"] for stop in STOP_HEADERS):
-            end = p["page"] - 1
-            break
-    return list(range(start, end + 1))
-
-def detect_latest_year_column(table):
-    header_text = " ".join(str(c) for c in table[0] if c)
-    years = re.findall(r"(20\d{2})", header_text)
-
-    if not years:
-
-        return len(table[0]) - 1
-
-    latest_year = max(int(y) for y in years)
-
-    for idx, cell in enumerate(table[0]):
-        if cell and str(latest_year) in str(cell):
-            return idx
-
-    return len(table[0]) - 1
-
-
-def extract_from_statement_tables(pdf, pages, label_map):
+def extract_text_values(pdf, pages, label_map):
+    """
+    Statement-locked, row-based extraction.
+    Picks the rightmost numeric value on the matching row.
+    """
     results = {}
 
-    debug(f"Extracting from pages: {pages}")
-
     for p in pages:
-        tables = pdf.pages[p].extract_tables() or []
-        debug(f"Page {p}: tables found = {len(tables)}")
+        text = pdf.pages[p].extract_text()
+        if not text:
+            continue
 
-        for table in tables:
-            debug(f"Table header: {table[0]}")
+        for line in text.split("\n"):
+            line_l = line.lower()
 
-            year_col = detect_latest_year_column(table)
-            debug(f"Detected year column index: {year_col}")
-
-            if year_col is None:
-                continue
-
-            for row in table[1:]:
-                label = str(row[0]).lower()
-                val = row[year_col] if len(row) > year_col else None
-                debug(f"Row label: {label} | Value: {val}")
-
-                parsed = parse_number(val)
-                if parsed is None:
+            for metric, keys in label_map.items():
+                if metric in results:
                     continue
 
-                for metric, keywords in label_map.items():
-                    if metric in results:
-                        continue
-                    if any(k in label for k in keywords):
-                        results[metric] = parsed
-                        debug(f"✔ Matched {metric} = {parsed}")
+                if any(k in line_l for k in keys):
+                    numbers = re.findall(r"\(?\d[\d,]*\)?", line)
+                    if numbers:
+                        value = parse_number(numbers[-1])  # latest year = rightmost
+                        if value is not None:
+                            results[metric] = value
 
     return results
-
-
-    return results
-
-def sanity_check(financials):
-    issues = []
-
-    if financials.get("Revenue", 0) < 1000:
-        issues.append("Revenue suspiciously low")
-
-    if financials.get("EBITDA", 0) > financials.get("Revenue", 0):
-        issues.append("EBITDA exceeds revenue")
-
-    if financials.get("Net Profit", 0) > financials.get("Revenue", 0):
-        issues.append("Net profit exceeds revenue")
-
-    return issues
-
-def debug(msg):
-    print(f"[PIPELINE DEBUG] {msg}")
 
 
 def run_financial_analysis(pdf_path):
     financials = {}
 
     with pdfplumber.open(pdf_path) as pdf:
-        pages = scan_document(pdf)
-        debug(f"Total pages in PDF: {len(pages)}")
+        pages = scan_pages(pdf)
 
-        bs_candidates = detect_statement_pages(
+        bs_pages = find_statement_pages(
             pages, STATEMENT_HEADERS["balance_sheet"]
         )
-        pl_candidates = detect_statement_pages(
+        pl_pages = find_statement_pages(
             pages, STATEMENT_HEADERS["profit_loss"]
         )
 
-        debug(f"Balance Sheet start pages: {bs_candidates}")
-        debug(f"P&L start pages: {pl_candidates}")
-
-        bs_pages = infer_statement_range(bs_candidates, pages)
-        pl_pages = infer_statement_range(pl_candidates, pages)
-
-        debug(f"Balance Sheet page range: {bs_pages}")
-        debug(f"P&L page range: {pl_pages}")
-
         financials.update(
-            extract_from_statement_tables(pdf, bs_pages, BS_LABELS)
+            extract_text_values(pdf, bs_pages, BS_LABELS)
         )
         financials.update(
-            extract_from_statement_tables(pdf, pl_pages, PL_LABELS)
+            extract_text_values(pdf, pl_pages, PL_LABELS)
         )
-
-        debug(f"Extracted financials so far: {financials}")
 
 
     financials.setdefault("Total Debt", 0.0)
     financials.setdefault("Principal Repayment", 0.0)
 
+    
+
     financials["EBIT"] = (
-        financials.get("PBT", 0) + financials.get("Interest Expense", 0)
+        financials.get("PBT", 0)
+        + financials.get("Interest Expense", 0)
     )
+
     financials["EBITDA"] = (
-        financials["EBIT"] + financials.get("Depreciation", 0)
+        financials["EBIT"]
+        + financials.get("Depreciation", 0)
     )
+
+   
 
     ca = financials.get("Current Assets", 0)
     cl = financials.get("Current Liabilities", 0)
@@ -213,19 +137,18 @@ def run_financial_analysis(pdf_path):
     ebit = financials.get("EBIT", 0)
     ebitda = financials.get("EBITDA", 0)
     interest = financials.get("Interest Expense", 0)
+    principal = financials.get("Principal Repayment", 0)
 
-    capital_employed = nw + td if nw > 0 else 0
+    capital_employed = nw + td if nw > 0 else None
+    debt_service = interest + principal
 
     ratios = {
-        "Current Ratio": ca / cl if cl else None,
-        "Debt-Equity Ratio": td / nw if nw else None,
-        "Interest Coverage Ratio": ebit / interest if interest else None,
-        "DSCR": ebitda / interest if interest else None,
+        "Current Ratio": ca / cl if cl > 0 else None,
+        "Debt-Equity Ratio": td / nw if nw > 0 else None,
+        "Interest Coverage Ratio": ebit / interest if interest > 0 else None,
+        "DSCR": ebitda / debt_service if debt_service > 0 else None,
         "ROCE": ebit / capital_employed if capital_employed else None,
-        "ROA": np / ta if ta else None,
+        "ROA": np / ta if ta > 0 else None,
     }
 
-    risk_flags = {k: assign_risk_flag(v, k) for k, v in ratios.items()}
-    financials["_extraction_warnings"] = sanity_check(financials)
-
-    return financials, ratios, risk_flags
+    return financials, ratios
