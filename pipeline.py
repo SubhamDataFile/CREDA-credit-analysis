@@ -105,29 +105,39 @@ def detect_latest_year_column(table):
 def extract_from_statement_tables(pdf, pages, label_map):
     results = {}
 
+    debug(f"Extracting from pages: {pages}")
+
     for p in pages:
         tables = pdf.pages[p].extract_tables() or []
+        debug(f"Page {p}: tables found = {len(tables)}")
+
         for table in tables:
-            if not table or len(table) < 2:
-                continue
+            debug(f"Table header: {table[0]}")
 
             year_col = detect_latest_year_column(table)
+            debug(f"Detected year column index: {year_col}")
+
+            if year_col is None:
+                continue
 
             for row in table[1:]:
-                if not row or len(row) <= year_col:
-                    continue
-
                 label = str(row[0]).lower()
-                value = parse_number(row[year_col])
+                val = row[year_col] if len(row) > year_col else None
+                debug(f"Row label: {label} | Value: {val}")
 
-                if value is None:
+                parsed = parse_number(val)
+                if parsed is None:
                     continue
 
                 for metric, keywords in label_map.items():
                     if metric in results:
                         continue
                     if any(k in label for k in keywords):
-                        results[metric] = value
+                        results[metric] = parsed
+                        debug(f"✔ Matched {metric} = {parsed}")
+
+    return results
+
 
     return results
 
@@ -145,23 +155,41 @@ def sanity_check(financials):
 
     return issues
 
+def debug(msg):
+    print(f"[PIPELINE DEBUG] {msg}")
+
+
 def run_financial_analysis(pdf_path):
     financials = {}
 
     with pdfplumber.open(pdf_path) as pdf:
         pages = scan_document(pdf)
+        debug(f"Total pages in PDF: {len(pages)}")
 
-        bs_pages = infer_statement_range(
-            detect_statement_pages(pages, STATEMENT_HEADERS["balance_sheet"]),
-            pages,
+        bs_candidates = detect_statement_pages(
+            pages, STATEMENT_HEADERS["balance_sheet"]
         )
-        pl_pages = infer_statement_range(
-            detect_statement_pages(pages, STATEMENT_HEADERS["profit_loss"]),
-            pages,
+        pl_candidates = detect_statement_pages(
+            pages, STATEMENT_HEADERS["profit_loss"]
         )
 
-        financials.update(extract_from_statement_tables(pdf, bs_pages, BS_LABELS))
-        financials.update(extract_from_statement_tables(pdf, pl_pages, PL_LABELS))
+        debug(f"Balance Sheet start pages: {bs_candidates}")
+        debug(f"P&L start pages: {pl_candidates}")
+
+        bs_pages = infer_statement_range(bs_candidates, pages)
+        pl_pages = infer_statement_range(pl_candidates, pages)
+
+        debug(f"Balance Sheet page range: {bs_pages}")
+        debug(f"P&L page range: {pl_pages}")
+
+        financials.update(
+            extract_from_statement_tables(pdf, bs_pages, BS_LABELS)
+        )
+        financials.update(
+            extract_from_statement_tables(pdf, pl_pages, PL_LABELS)
+        )
+
+        debug(f"Extracted financials so far: {financials}")
 
 
     financials.setdefault("Total Debt", 0.0)
