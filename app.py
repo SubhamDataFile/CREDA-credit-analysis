@@ -177,12 +177,11 @@ if st.session_state.analysis_done:
             commentary = polish_credit_commentary(commentary)
             commentary["ai_enhanced"] = True
             st.caption("✳ AI enhanced language only. Credit logic unchanged.")
-        except Exception:
+        except Exception as e:
             commentary["ai_enhanced"] = False
-            st.info(
-                "AI language enhancement is currently unavailable. "
-                "The credit commentary shown is fully rule-based and unaffected."
-            )
+            st.error("AI ERROR:")
+            st.code(str(e))
+
 
     
 
