@@ -1,7 +1,6 @@
 import os
 from openai import OpenAI
 
-
 def polish_credit_commentary(commentary: dict) -> dict:
     """
     Language-only enhancement of credit commentary.
@@ -31,14 +30,9 @@ CONCLUSION:
     prompt = f"""
 You are a senior credit analyst.
 
-Improve ONLY the language, clarity, and professional tone
-of the following credit commentary.
-
-STRICT RULES:
-- Do NOT change numbers
-- Do NOT change ratios
-- Do NOT change conclusions
-- Do NOT add new insights
+Improve the language, structure, and professional tone of the following
+credit commentary. Do NOT change numbers, logic, or conclusions.
+Do NOT add new insights.
 
 Rewrite cleanly and concisely.
 
@@ -47,7 +41,7 @@ TEXT:
 """
 
     response = client.responses.create(
-        model="gpt-4.1-mini",
+        model="gpt-4o-mini",
         input=prompt,
         temperature=0.3,
     )
