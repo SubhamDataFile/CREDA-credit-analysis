@@ -2,7 +2,6 @@ import pdfplumber
 import re
 import math
 
-
 RISK_THRESHOLDS = {
     "Current Ratio": {"green": 1.5, "amber": 1.0},
     "Debt-Equity Ratio": {"green": 1.0, "amber": 2.0},
@@ -11,25 +10,40 @@ RISK_THRESHOLDS = {
     "ROCE": {"green": 0.15, "amber": 0.10},
     "ROA": {"green": 0.08, "amber": 0.04},
     "EBITDA Margin": {"green": 0.20, "amber": 0.12},
-    "Net Profit Margin": {"green": 0.10, "amber": 0.05}
+    "Net Profit Margin": {"green": 0.10, "amber": 0.05},
 }
 
-
 PL_LABELS = {
-    "Revenue": ["revenue", "total income", "turnover"],
-    "Net Profit": ["net profit", "profit after tax", "pat", "profit for the year"],
-    "PBT": ["profit before tax", "pbt"],
+    "Revenue": ["revenue from operations", "total income", "revenue"],
+    "Net Profit": ["profit for the year", "profit after tax", "pat"],
+    "PBT": ["profit before tax"],
     "Interest Expense": ["finance cost", "interest"],
-    "Depreciation": ["depreciation", "amortisation"]
+    "Depreciation": ["depreciation", "amortisation"],
 }
 
 BS_LABELS = {
-    "Current Assets": ["current assets"],
-    "Current Liabilities": ["current liabilities"],
+    "Current Assets": ["total current assets"],
+    "Current Liabilities": ["total current liabilities"],
     "Total Assets": ["total assets"],
-    "Net Worth": ["net worth", "equity", "shareholders"]
+    "Net Worth": ["total equity", "equity attributable"],
 }
 
+STATEMENT_HEADERS = {
+    "balance_sheet": [
+        "consolidated balance sheet",
+        "consolidated statement of financial position",
+    ],
+    "profit_loss": [
+        "consolidated statement of profit",
+        "consolidated statement of profit and loss",
+    ],
+}
+
+STOP_HEADERS = [
+    "notes to the consolidated financial statements",
+    "notes forming part",
+    "independent auditor",
+]
 
 def parse_number(x):
     if not isinstance(x, str):
@@ -55,95 +69,126 @@ def assign_risk_flag(value, metric):
         return "AMBER"
     return "RED"
 
-
-def find_consolidated_section(pdf):
+def scan_document(pdf):
+    pages = []
     for i, page in enumerate(pdf.pages):
-        txt = page.extract_text()
-        if txt and "consolidated" in txt.lower():
-            return i
-    return 0  
+        text = page.extract_text() or ""
+        pages.append({"page": i, "text": text.lower()})
+    return pages
 
 
-def extract_from_tables(tables, label_map):
+def detect_statement_pages(pages, headers):
+    return [p["page"] for p in pages if any(h in p["text"] for h in headers)]
+
+
+def infer_statement_range(start_pages, pages):
+    if not start_pages:
+        return []
+    start = start_pages[0]
+    end = len(pages) - 1
+    for p in pages[start + 1 :]:
+        if any(stop in p["text"] for stop in STOP_HEADERS):
+            end = p["page"] - 1
+            break
+    return list(range(start, end + 1))
+
+def detect_latest_year_column(table):
+    header = table[0]
+    latest_year = 0
+    year_col = None
+
+    for idx, cell in enumerate(header):
+        if not cell:
+            continue
+        match = re.search(r"(20\d{2})", str(cell))
+        if match:
+            year = int(match.group(1))
+            if year > latest_year:
+                latest_year = year
+                year_col = idx
+
+    return year_col
+
+
+def extract_from_statement_tables(pdf, pages, label_map):
     results = {}
 
-    for table in tables:
-        for row in table:
-            if not row or len(row) < 2:
+    for p in pages:
+        tables = pdf.pages[p].extract_tables()
+        if not tables:
+            continue
+
+        for table in tables:
+            if not table or len(table) < 2:
                 continue
 
-            label = str(row[0]).lower().strip()
+            year_col = detect_latest_year_column(table)
+            if year_col is None:
+                continue  
 
-            for metric, keywords in label_map.items():
-                if metric in results:
+            for row in table[1:]:
+                if not row or len(row) <= year_col:
                     continue
-                if any(k in label for k in keywords):
-                    val = row[-1]
-                    if isinstance(val, str) and re.search(r"\d", val):
+
+                label = str(row[0]).lower()
+
+                for metric, keywords in label_map.items():
+                    if metric in results:
+                        continue
+                    if any(k in label for k in keywords):
+                        val = row[year_col]
                         parsed = parse_number(val)
                         if parsed is not None:
                             results[metric] = parsed
+
     return results
 
+def sanity_check(financials):
+    issues = []
 
-def extract_from_text(pdf, label_map):
-    """
-    Fallback extraction when tables fail.
-    Extremely important for real annual reports.
-    """
-    results = {}
+    if financials.get("Revenue", 0) < 1000:
+        issues.append("Revenue suspiciously low")
 
-    for page in pdf.pages:
-        text = page.extract_text()
-        if not text:
-            continue
+    if financials.get("EBITDA", 0) > financials.get("Revenue", 0):
+        issues.append("EBITDA exceeds revenue")
 
-        lines = text.lower().split("\n")
-        for line in lines:
-            for metric, keywords in label_map.items():
-                if metric in results:
-                    continue
-                if any(k in line for k in keywords):
-                    nums = re.findall(r"\(?\d[\d,]*\)?", line)
-                    if nums:
-                        parsed = parse_number(nums[-1])
-                        if parsed is not None:
-                            results[metric] = parsed
-    return results
+    if financials.get("Net Profit", 0) > financials.get("Revenue", 0):
+        issues.append("Net profit exceeds revenue")
 
+    return issues
 
 def run_financial_analysis(pdf_path):
     financial_data = {}
 
     with pdfplumber.open(pdf_path) as pdf:
-        start_page = find_consolidated_section(pdf)
+        pages = scan_document(pdf)
 
-        tables = []
-        for p in range(start_page, min(start_page + 40, len(pdf.pages))):
-            page_tables = pdf.pages[p].extract_tables()
-            if page_tables:
-                tables.extend(page_tables)
+        bs_pages = infer_statement_range(
+            detect_statement_pages(pages, STATEMENT_HEADERS["balance_sheet"]),
+            pages,
+        )
+        pl_pages = infer_statement_range(
+            detect_statement_pages(pages, STATEMENT_HEADERS["profit_loss"]),
+            pages,
+        )
 
-        pl_data = extract_from_tables(tables, PL_LABELS)
-        bs_data = extract_from_tables(tables, BS_LABELS)
-
-        if not pl_data:
-            pl_data = extract_from_text(pdf, PL_LABELS)
-        if not bs_data:
-            bs_data = extract_from_text(pdf, BS_LABELS)
-
-        financial_data.update(pl_data)
-        financial_data.update(bs_data)
+        financial_data.update(
+            extract_from_statement_tables(pdf, bs_pages, BS_LABELS)
+        )
+        financial_data.update(
+            extract_from_statement_tables(pdf, pl_pages, PL_LABELS)
+        )
 
         financial_data.setdefault("Total Debt", 0.0)
+        financial_data.setdefault("Principal Repayment", 0.0)
 
+   
     financial_data["EBIT"] = (
         financial_data.get("PBT", 0) + financial_data.get("Interest Expense", 0)
     )
     financial_data["EBITDA"] = (
         financial_data["EBIT"] + financial_data.get("Depreciation", 0)
     )
-    financial_data["Principal Repayment"] = 0.0
 
     ca = financial_data.get("Current Assets", 0)
     cl = financial_data.get("Current Liabilities", 0)
@@ -171,5 +216,7 @@ def run_financial_analysis(pdf_path):
     }
 
     risk_flags = {k: assign_risk_flag(v, k) for k, v in ratios.items()}
+
+    financial_data["_extraction_warnings"] = sanity_check(financial_data)
 
     return financial_data, ratios, risk_flags
