@@ -1,6 +1,5 @@
 import pdfplumber
 import re
-import math
 
 
 
@@ -30,10 +29,6 @@ STATEMENT_HEADERS = {
     ],
 }
 
-STOP_HEADERS = [
-    "notes to the consolidated financial statements",
-    "notes forming part",
-]
 
 
 def parse_number(text):
@@ -41,7 +36,7 @@ def parse_number(text):
         return None
     text = text.replace(",", "").strip()
     if text.startswith("(") and text.endswith(")"):
-        return -float(text[1:-1])
+        text = "-" + text[1:-1]
     try:
         return float(text)
     except:
@@ -59,10 +54,13 @@ def find_statement_pages(pages, headers):
     return [p["page"] for p in pages if any(h in p["text"] for h in headers)]
 
 
-def extract_text_values(pdf, pages, label_map):
+
+def extract_text_values(pdf, pages, label_map, statement_name, diagnostics):
     """
-    Statement-locked, row-based extraction.
-    Picks the rightmost numeric value on the matching row.
+    Phase 1 extraction:
+    - Statement locked
+    - Provenance aware
+    - Confidence + warnings
     """
     results = {}
 
@@ -70,6 +68,8 @@ def extract_text_values(pdf, pages, label_map):
         text = pdf.pages[p].extract_text()
         if not text:
             continue
+
+        diagnostics["pages_scanned"].add(p + 1)
 
         for line in text.split("\n"):
             line_l = line.lower()
@@ -79,17 +79,50 @@ def extract_text_values(pdf, pages, label_map):
                     continue
 
                 if any(k in line_l for k in keys):
+                    warnings = []
+                    confidence = 0.8  # base confidence
+
+                    # Unit contamination detection
+                    if "nos" in line_l or "units" in line_l:
+                        warnings.append("Unit-based row (Nos/Units)")
+                        confidence -= 0.3
+
                     numbers = re.findall(r"\(?\d[\d,]*\)?", line)
-                    if numbers:
-                        value = parse_number(numbers[-1])  # latest year = rightmost
-                        if value is not None:
-                            results[metric] = value
+                    if not numbers:
+                        warnings.append("Label matched but no numeric value found")
+                        confidence = 0.0
+                        continue
+
+                    value = parse_number(numbers[-1])  # rightmost = latest year
+                    if value is None:
+                        warnings.append("Numeric parsing failed")
+                        confidence = 0.0
+                        continue
+
+                    results[metric] = {
+                        "value": value,
+                        "statement": statement_name,
+                        "page": p + 1,
+                        "method": "regex-row",
+                        "confidence": round(max(confidence, 0.0), 2),
+                        "warnings": warnings,
+                    }
+
+                    diagnostics["metrics_extracted"][metric] = results[metric]
 
     return results
 
 
+
 def run_financial_analysis(pdf_path):
-    financials = {}
+    metrics = {}
+
+    diagnostics = {
+        "pages_scanned": set(),
+        "statements_detected": {},
+        "metrics_extracted": {},
+        "warnings": [],
+    }
 
     with pdfplumber.open(pdf_path) as pdf:
         pages = scan_pages(pdf)
@@ -101,43 +134,66 @@ def run_financial_analysis(pdf_path):
             pages, STATEMENT_HEADERS["profit_loss"]
         )
 
-        financials.update(
-            extract_text_values(pdf, bs_pages, BS_LABELS)
-        )
-        financials.update(
-            extract_text_values(pdf, pl_pages, PL_LABELS)
+        diagnostics["statements_detected"]["Balance Sheet"] = {
+            "detected": bool(bs_pages),
+            "pages": [p + 1 for p in bs_pages],
+        }
+
+        diagnostics["statements_detected"]["Profit & Loss"] = {
+            "detected": bool(pl_pages),
+            "pages": [p + 1 for p in pl_pages],
+        }
+
+        metrics.update(
+            extract_text_values(
+                pdf, bs_pages, BS_LABELS, "Balance Sheet", diagnostics
+            )
         )
 
-
-    financials.setdefault("Total Debt", 0.0)
-    financials.setdefault("Principal Repayment", 0.0)
+        metrics.update(
+            extract_text_values(
+                pdf, pl_pages, PL_LABELS, "Profit & Loss", diagnostics
+            )
+        )
 
     
 
-    financials["EBIT"] = (
-        financials.get("PBT", 0)
-        + financials.get("Interest Expense", 0)
-    )
+    for k in ["Total Debt", "Principal Repayment"]:
+        if k not in metrics:
+            metrics[k] = {
+                "value": 0.0,
+                "statement": "Manual / Assumed",
+                "confidence": 0.5,
+                "warnings": ["Defaulted to zero"],
+            }
 
-    financials["EBITDA"] = (
-        financials["EBIT"]
-        + financials.get("Depreciation", 0)
-    )
+
+    def v(key):
+        return metrics.get(key, {}).get("value", 0.0)
+
+    metrics["EBIT"] = {
+        "value": v("PBT") + v("Interest Expense"),
+        "statement": "Derived",
+        "confidence": 0.9,
+        "warnings": [],
+    }
+
+    metrics["EBITDA"] = {
+        "value": metrics["EBIT"]["value"] + v("Depreciation"),
+        "statement": "Derived",
+        "confidence": 0.9,
+        "warnings": [],
+    }
 
    
 
-    ca = financials.get("Current Assets", 0)
-    cl = financials.get("Current Liabilities", 0)
-    nw = financials.get("Net Worth", 0)
-    td = financials.get("Total Debt", 0)
-    ta = financials.get("Total Assets", nw + td)
+    ca, cl = v("Current Assets"), v("Current Liabilities")
+    nw, td = v("Net Worth"), v("Total Debt")
+    ta = v("Total Assets") or (nw + td)
 
-    rev = financials.get("Revenue", 0)
-    np = financials.get("Net Profit", 0)
-    ebit = financials.get("EBIT", 0)
-    ebitda = financials.get("EBITDA", 0)
-    interest = financials.get("Interest Expense", 0)
-    principal = financials.get("Principal Repayment", 0)
+    np = v("Net Profit")
+    ebit, ebitda = v("EBIT"), v("EBITDA")
+    interest, principal = v("Interest Expense"), v("Principal Repayment")
 
     capital_employed = nw + td if nw > 0 else None
     debt_service = interest + principal
@@ -151,4 +207,8 @@ def run_financial_analysis(pdf_path):
         "ROA": np / ta if ta > 0 else None,
     }
 
-    return financials, ratios
+    return {
+        "metrics": metrics,
+        "ratios": ratios,
+        "diagnostics": diagnostics,
+    }
