@@ -15,7 +15,6 @@ PL_LABELS = {
     "Depreciation": ["depreciation and amortization"],
 }
 
-
 BS_LABELS = {
     "Current Assets": ["total current assets"],
     "Current Liabilities": ["total current liabilities"],
@@ -161,7 +160,9 @@ def extract_regex_fallback(pdf, pages, label_map, statement, diagnostics):
         if not text:
             continue
 
-        for line in text.split("\n"):
+        lines = text.split("\n")
+
+        for i, line in enumerate(lines):
             line_l = line.lower()
 
             for metric, keys in label_map.items():
@@ -170,13 +171,24 @@ def extract_regex_fallback(pdf, pages, label_map, statement, diagnostics):
 
                 if any(k in line_l for k in keys):
                     nums = re.findall(r"\(?\d[\d,]*\)?", line)
+
+                    if not nums and i + 1 < len(lines):
+                        nums = re.findall(
+                            r"\(?\d[\d,]*\)?", lines[i + 1]
+                        )
+
                     values = [parse_number(n) for n in nums]
                     values = [v for v in values if v and abs(v) >= 1000]
 
                     if not values:
                         continue
 
-                    value = values[-1]
+                   
+                    if metric in ["Revenue", "Total Assets", "Current Assets"]:
+                        value = max(values)
+                    else:
+
+                        value = values[-2] if len(values) >= 2 else values[-1]
 
                     results[metric] = {
                         "value": value,
