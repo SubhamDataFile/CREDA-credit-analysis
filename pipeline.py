@@ -5,11 +5,16 @@ import re
 
 PL_LABELS = {
     "Revenue": ["revenue from operations", "total income"],
-    "Net Profit": ["profit for the year"],
+    "Net Profit": [
+        "profit for the year",
+        "profit attributable to owners",
+        "profit attributable to equity holders",
+    ],
     "PBT": ["profit before tax"],
     "Interest Expense": ["finance cost"],
     "Depreciation": ["depreciation and amortization"],
 }
+
 
 BS_LABELS = {
     "Current Assets": ["total current assets"],
@@ -171,7 +176,7 @@ def extract_regex_fallback(pdf, pages, label_map, statement, diagnostics):
                     if not values:
                         continue
 
-                    value = max(values)
+                    value = values[-1]
 
                     results[metric] = {
                         "value": value,
