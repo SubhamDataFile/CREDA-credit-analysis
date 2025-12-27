@@ -2,9 +2,6 @@ import pdfplumber
 import re
 
 
-# =====================================================
-# Label Dictionaries (Consolidated Statements Only)
-# =====================================================
 
 PL_LABELS = {
     "Revenue": ["revenue from operations", "total income"],
@@ -37,9 +34,6 @@ STOP_HEADERS = [
 ]
 
 
-# =====================================================
-# Utilities
-# =====================================================
 
 def parse_number(text):
     if not isinstance(text, str):
@@ -90,66 +84,50 @@ def detect_consolidated_statement_blocks(pages):
 
 
 
-def detect_year_columns(table):
-    year_cols = {}
-    header = table[0]
-
-    for idx, cell in enumerate(header):
-        if not cell:
-            continue
-        m = re.search(r"(20\d{2})", str(cell))
-        if m:
-            year_cols[m.group(1)] = idx
-
-    return year_cols
-
-
-def extract_from_table(table, label_map, statement, page_no, diagnostics):
+def extract_metrics_from_text(pdf, pages, label_map, statement, diagnostics):
     results = {}
-    year_cols = detect_year_columns(table)
 
-    if not year_cols:
-        return results
+    for p in pages:
+        text = pdf.pages[p].extract_text() or ""
+        diagnostics["pages_scanned"].add(p + 1)
 
-    latest_year = max(year_cols.keys())
-    col_idx = year_cols[latest_year]
+        lines = [l.strip() for l in text.split("\n") if l.strip()]
 
-    for row in table[1:]:
-        if not row or not row[0]:
-            continue
+        for i, line in enumerate(lines):
+            line_l = line.lower()
 
-        label = str(row[0]).lower()
-
-        for metric, keys in label_map.items():
-            if metric in results:
-                continue
-
-            if any(k in label for k in keys):
-                value = parse_number(str(row[col_idx]))
-                if value is None or abs(value) < 1000:
+            for metric, keys in label_map.items():
+                if metric in results:
                     continue
 
-                results[metric] = {
-                    "value": value,
-                    "statement": statement,
-                    "page": page_no,
-                    "method": "table-column",
-                    "confidence": 0.95,
-                    "warnings": [],
-                }
-                diagnostics["metrics_extracted"][metric] = results[metric]
+                if any(k in line_l for k in keys):
+                   
+                    block = " ".join(lines[i:i + 3])
+                    nums = re.findall(r"\(?\d[\d,]*\)?", block)
+                    values = [parse_number(n) for n in nums if parse_number(n)]
+                    values = [v for v in values if abs(v) >= 1000]
+
+                    if not values:
+                        continue
+
+                    value = max(values)  
+
+                    results[metric] = {
+                        "value": value,
+                        "statement": statement,
+                        "page": p + 1,
+                        "method": "text-block",
+                        "confidence": 0.9,
+                        "warnings": [],
+                    }
+
+                    diagnostics["metrics_extracted"][metric] = results[metric]
 
     return results
 
 
 
 def extract_net_profit_from_text(pdf, pages):
-    """
-    Extract Net Profit from flattened text.
-    Priority:
-    1. Profit after tax / Profit for the year
-    2. Total comprehensive income attributable to owners
-    """
     candidates = []
 
     for p in pages:
@@ -171,7 +149,6 @@ def extract_net_profit_from_text(pdf, pages):
 
 
 
-
 def run_financial_analysis(pdf_path):
     metrics = {}
 
@@ -186,43 +163,42 @@ def run_financial_analysis(pdf_path):
         pages = scan_pages(pdf)
         blocks = detect_consolidated_statement_blocks(pages)
 
-        
+      
         bs_pages = blocks.get("Balance Sheet", [])
         diagnostics["statements_detected"]["Balance Sheet"] = {
             "detected": bool(bs_pages),
             "pages": [p + 1 for p in bs_pages],
         }
 
-        for p in bs_pages:
-            diagnostics["pages_scanned"].add(p + 1)
-            for table in pdf.pages[p].extract_tables() or []:
-                metrics.update(
-                    extract_from_table(table, BS_LABELS, "Balance Sheet", p + 1, diagnostics)
-                )
+        metrics.update(
+            extract_metrics_from_text(
+                pdf, bs_pages, BS_LABELS, "Balance Sheet", diagnostics
+            )
+        )
 
+       
         pl_pages = blocks.get("Profit & Loss", [])
         diagnostics["statements_detected"]["Profit & Loss"] = {
             "detected": bool(pl_pages),
             "pages": [p + 1 for p in pl_pages],
         }
 
-        for p in pl_pages:
-            diagnostics["pages_scanned"].add(p + 1)
-            for table in pdf.pages[p].extract_tables() or []:
-                metrics.update(
-                    extract_from_table(table, PL_LABELS, "Profit & Loss", p + 1, diagnostics)
-                )
+        metrics.update(
+            extract_metrics_from_text(
+                pdf, pl_pages, PL_LABELS, "Profit & Loss", diagnostics
+            )
+        )
 
-        
         net_profit = extract_net_profit_from_text(pdf, pl_pages)
         if net_profit:
             metrics["Net Profit"] = {
                 "value": net_profit,
                 "statement": "Profit & Loss",
                 "method": "text-block",
-                "confidence": 0.9,
-                "warnings": ["Extracted from flattened text"],
+                "confidence": 0.95,
+                "warnings": [],
             }
+
 
     for k in ["Total Debt", "Principal Repayment"]:
         metrics.setdefault(
