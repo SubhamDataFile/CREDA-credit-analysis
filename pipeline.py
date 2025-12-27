@@ -2,6 +2,9 @@ import pdfplumber
 import re
 
 
+# =====================================================
+# Label Dictionaries (Consolidated Statements Only)
+# =====================================================
 
 PL_LABELS = {
     "Revenue": ["revenue from operations", "total income"],
@@ -34,6 +37,9 @@ STOP_HEADERS = [
 ]
 
 
+# =====================================================
+# Utilities
+# =====================================================
 
 def parse_number(text):
     if not isinstance(text, str):
@@ -98,28 +104,6 @@ def detect_year_columns(table):
     return year_cols
 
 
-
-def extract_attributable_net_profit(table, col_idx):
-    """
-    Net Profit = Profit attributable to Owners of the Company
-    """
-    for i, row in enumerate(table):
-        if not row or not row[0]:
-            continue
-
-        label = str(row[0]).lower()
-
-        if "profit attributable to" in label:
-          
-            for j in range(i + 1, len(table)):
-                owner_row = table[j]
-                if owner_row and owner_row[0]:
-                    if "owners" in str(owner_row[0]).lower():
-                        return parse_number(str(owner_row[col_idx]))
-    return None
-
-
-
 def extract_from_table(table, label_map, statement, page_no, diagnostics):
     results = {}
     year_cols = detect_year_columns(table)
@@ -129,19 +113,6 @@ def extract_from_table(table, label_map, statement, page_no, diagnostics):
 
     latest_year = max(year_cols.keys())
     col_idx = year_cols[latest_year]
-
-    if statement == "Profit & Loss":
-        net_profit = extract_attributable_net_profit(table, col_idx)
-        if net_profit and abs(net_profit) >= 1000:
-            results["Net Profit"] = {
-                "value": net_profit,
-                "statement": statement,
-                "page": page_no,
-                "method": "attributable-structure",
-                "confidence": 0.98,
-                "warnings": [],
-            }
-            diagnostics["metrics_extracted"]["Net Profit"] = results["Net Profit"]
 
     for row in table[1:]:
         if not row or not row[0]:
@@ -154,9 +125,7 @@ def extract_from_table(table, label_map, statement, page_no, diagnostics):
                 continue
 
             if any(k in label for k in keys):
-                raw = row[col_idx]
-                value = parse_number(str(raw))
-
+                value = parse_number(str(row[col_idx]))
                 if value is None or abs(value) < 1000:
                     continue
 
@@ -168,50 +137,38 @@ def extract_from_table(table, label_map, statement, page_no, diagnostics):
                     "confidence": 0.95,
                     "warnings": [],
                 }
-
                 diagnostics["metrics_extracted"][metric] = results[metric]
 
     return results
 
 
 
-def extract_regex_fallback(pdf, pages, label_map, statement, diagnostics):
-    results = {}
+def extract_net_profit_from_text(pdf, pages):
+    """
+    Extract Net Profit from flattened text.
+    Priority:
+    1. Profit after tax / Profit for the year
+    2. Total comprehensive income attributable to owners
+    """
+    candidates = []
 
     for p in pages:
-        text = pdf.pages[p].extract_text()
-        if not text:
-            continue
-
+        text = pdf.pages[p].extract_text() or ""
         for line in text.split("\n"):
             line_l = line.lower()
 
-            for metric, keys in label_map.items():
-                if metric in results:
-                    continue
+            if (
+                "profit after tax" in line_l
+                or "profit for the year" in line_l
+                or "attributable to the owners" in line_l
+            ):
+                nums = re.findall(r"\(?\d[\d,]*\)?", line)
+                values = [parse_number(n) for n in nums if parse_number(n)]
+                values = [v for v in values if abs(v) >= 1000]
+                candidates.extend(values)
 
-                if any(k in line_l for k in keys):
-                    nums = re.findall(r"\(?\d[\d,]*\)?", line)
-                    values = [parse_number(n) for n in nums if parse_number(n)]
-                    values = [v for v in values if abs(v) >= 1000]
+    return max(candidates) if candidates else None
 
-                    if not values:
-                        continue
-
-                    value = max(values)
-
-                    results[metric] = {
-                        "value": value,
-                        "statement": statement,
-                        "page": p + 1,
-                        "method": "regex-fallback",
-                        "confidence": 0.6,
-                        "warnings": ["Metric-level regex fallback"],
-                    }
-
-                    diagnostics["metrics_extracted"][metric] = results[metric]
-
-    return results
 
 
 
@@ -229,6 +186,7 @@ def run_financial_analysis(pdf_path):
         pages = scan_pages(pdf)
         blocks = detect_consolidated_statement_blocks(pages)
 
+        
         bs_pages = blocks.get("Balance Sheet", [])
         diagnostics["statements_detected"]["Balance Sheet"] = {
             "detected": bool(bs_pages),
@@ -255,31 +213,43 @@ def run_financial_analysis(pdf_path):
                     extract_from_table(table, PL_LABELS, "Profit & Loss", p + 1, diagnostics)
                 )
 
-        missing = {
-            k: PL_LABELS[k]
-            for k in PL_LABELS
-            if k not in metrics
-        }
-
-        if missing:
-            diagnostics["warnings"].append("Metric-level regex fallback used")
-            metrics.update(
-                extract_regex_fallback(pdf, pl_pages, missing, "Profit & Loss", diagnostics)
-            )
+        
+        net_profit = extract_net_profit_from_text(pdf, pl_pages)
+        if net_profit:
+            metrics["Net Profit"] = {
+                "value": net_profit,
+                "statement": "Profit & Loss",
+                "method": "text-block",
+                "confidence": 0.9,
+                "warnings": ["Extracted from flattened text"],
+            }
 
     for k in ["Total Debt", "Principal Repayment"]:
-        metrics.setdefault(k, {
-            "value": 0.0,
-            "statement": "Manual / Assumed",
-            "confidence": 0.5,
-            "warnings": ["Defaulted to zero"],
-        })
-
+        metrics.setdefault(
+            k,
+            {
+                "value": 0.0,
+                "statement": "Manual / Assumed",
+                "confidence": 0.5,
+                "warnings": ["Defaulted to zero"],
+            },
+        )
 
     def v(k): return metrics.get(k, {}).get("value", 0.0)
 
-    metrics["EBIT"] = {"value": v("PBT") + v("Interest Expense"), "statement": "Derived", "confidence": 0.9, "warnings": []}
-    metrics["EBITDA"] = {"value": metrics["EBIT"]["value"] + v("Depreciation"), "statement": "Derived", "confidence": 0.9, "warnings": []}
+    metrics["EBIT"] = {
+        "value": v("PBT") + v("Interest Expense"),
+        "statement": "Derived",
+        "confidence": 0.9,
+        "warnings": [],
+    }
+
+    metrics["EBITDA"] = {
+        "value": metrics["EBIT"]["value"] + v("Depreciation"),
+        "statement": "Derived",
+        "confidence": 0.9,
+        "warnings": [],
+    }
 
     ca, cl = v("Current Assets"), v("Current Liabilities")
     nw, td = v("Net Worth"), v("Total Debt")
@@ -295,4 +265,8 @@ def run_financial_analysis(pdf_path):
         "ROA": v("Net Profit") / ta if ta else None,
     }
 
-    return {"metrics": metrics, "ratios": ratios, "diagnostics": diagnostics}
+    return {
+        "metrics": metrics,
+        "ratios": ratios,
+        "diagnostics": diagnostics,
+    }
