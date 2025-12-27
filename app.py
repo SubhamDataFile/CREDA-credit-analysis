@@ -10,21 +10,19 @@ import math
 import os
 
 
-
 st.set_page_config(page_title="CREDA – AI Credit Analysis", layout="centered")
 
-st.title(" CREDA – AI-Powered Credit Analysis")
+st.title("CREDA – AI-Powered Credit Analysis")
 st.caption("Rule-based credit engine with optional AI-assisted commentary")
 
 st.info(
-    " Workflow: Upload annual report → Review extracted figures → "
+    "Workflow: Upload annual report → Review extracted figures → "
     "Adjust key financials if needed → Ratios, risk, and credit memo update live."
 )
 
 st.caption(
     "AI improves language only. All credit logic, ratios, and conclusions remain rule-based."
 )
-
 
 
 OVERRIDABLE_FIELDS = [
@@ -47,8 +45,11 @@ OVERRIDABLE_FIELDS = [
 if "analysis_done" not in st.session_state:
     st.session_state.analysis_done = False
 
-if "extracted" not in st.session_state:
-    st.session_state.extracted = {}
+if "metrics_raw" not in st.session_state:
+    st.session_state.metrics_raw = {}
+
+if "diagnostics" not in st.session_state:
+    st.session_state.diagnostics = {}
 
 if "adjusted_financials" not in st.session_state:
     st.session_state.adjusted_financials = {}
@@ -57,8 +58,9 @@ if "adjusted_financials" not in st.session_state:
 
 def safe_number(x):
     if x is None or (isinstance(x, float) and math.isnan(x)):
-        return 0
-    return x
+        return 0.0
+    return float(x)
+
 
 def recompute_ratios(f):
     ca = f.get("Current Assets", 0)
@@ -67,11 +69,9 @@ def recompute_ratios(f):
     td = f.get("Total Debt", 0)
     ta = f.get("Total Assets", nw + td)
 
-    revenue = f.get("Revenue", 0)
     net_profit = f.get("Net Profit", 0)
     ebitda = f.get("EBITDA", 0)
     depreciation = f.get("Depreciation", 0)
-    pbt = f.get("PBT", 0)
     interest = f.get("Interest Expense", 0)
     principal = f.get("Principal Repayment", 0)
 
@@ -102,7 +102,7 @@ if uploaded_file:
 
     st.success("Annual report uploaded")
 
-    st.markdown("###  Company Logo (Optional)")
+    st.markdown("### Company Logo (Optional)")
     logo_file = st.file_uploader("Upload Company Logo", type=["png", "jpg", "jpeg"])
 
     if logo_file:
@@ -113,28 +113,32 @@ if uploaded_file:
 
     if st.button("Run Credit Analysis"):
         with st.spinner("Extracting financials..."):
-            financial_data, ratios = run_financial_analysis(file_path)
+            result = run_financial_analysis(file_path)
 
-        st.session_state.extracted = financial_data
+        st.session_state.metrics_raw = result["metrics"]
+        st.session_state.diagnostics = result["diagnostics"]
         st.session_state.analysis_done = True
         st.success("Analysis completed")
 
 
 
 if st.session_state.analysis_done:
-    extracted = st.session_state.extracted
-    financials = extracted.copy()
+    metrics_raw = st.session_state.metrics_raw
+
+    financials = {
+        k: safe_number(v.get("value")) for k, v in metrics_raw.items()
+    }
 
     for field in OVERRIDABLE_FIELDS:
-        financials.setdefault(field, 0)
+        financials.setdefault(field, 0.0)
 
-    st.markdown("##  Analyst Adjustments")
+    st.markdown("## Analyst Adjustments")
     st.caption("Overrides trigger live recomputation")
 
     with st.expander("Edit Financial Inputs"):
         for field in OVERRIDABLE_FIELDS:
             st.session_state.adjusted_financials.setdefault(
-                field, float(financials.get(field, 0))
+                field, float(financials.get(field, 0.0))
             )
 
             st.session_state.adjusted_financials[field] = st.number_input(
@@ -147,19 +151,16 @@ if st.session_state.analysis_done:
     financials.update(st.session_state.adjusted_financials)
     ratios = recompute_ratios(financials)
 
-    balance_sheet_context = {
-        "total_debt": financials.get("Total Debt", 0),
-        "interest_expense": financials.get("Interest Expense", 0),
-    }
-
     risk_output = evaluate_credit_risk(
         ratios=ratios,
-        balance_sheet=balance_sheet_context,
+        balance_sheet={
+            "total_debt": financials.get("Total Debt", 0),
+            "interest_expense": financials.get("Interest Expense", 0),
+        },
     )
 
-    
 
-    st.markdown("##  Credit Commentary")
+    st.markdown("## Credit Commentary")
 
     use_ai = st.toggle(
         "Enhance commentary using AI (language only)",
@@ -180,13 +181,9 @@ if st.session_state.analysis_done:
         except Exception:
             commentary["ai_enhanced"] = False
             st.info(
-            "AI language enhancement is currently unavailable. "
-            "The credit commentary shown is fully rule-based and unaffected."
-    )
-
-
-
-    
+                "AI language enhancement is currently unavailable. "
+                "The credit commentary shown is fully rule-based."
+            )
 
     pdf_path = generate_credit_memo(
         financials=financials,
@@ -199,21 +196,21 @@ if st.session_state.analysis_done:
         output_path="credit_memo.pdf",
     )
 
+    
 
-    st.markdown("##  Credit Snapshot")
+    st.markdown("## Credit Snapshot")
     c1, c2, c3 = st.columns(3)
-    c1.metric("Revenue", f"₹ {safe_number(financials['Revenue']):,.0f}")
-    c2.metric("Net Profit", f"₹ {safe_number(financials['Net Profit']):,.0f}")
-    c3.metric("EBITDA", f"₹ {safe_number(financials['EBITDA']):,.0f}")
+    c1.metric("Revenue", f"₹ {financials['Revenue']:,.0f}")
+    c2.metric("Net Profit", f"₹ {financials['Net Profit']:,.0f}")
+    c3.metric("EBITDA", f"₹ {financials['EBITDA']:,.0f}")
 
-    st.markdown("###  Key Ratios")
+    st.markdown("### Key Ratios")
     r1, r2, r3 = st.columns(3)
     r1.metric("DSCR", "NA" if ratios["DSCR"] is None else f"{ratios['DSCR']:.2f}")
     r2.metric("ROCE", "NA" if ratios["ROCE"] is None else f"{ratios['ROCE']*100:.1f}%")
     r3.metric("ROA", "NA" if ratios["ROA"] is None else f"{ratios['ROA']*100:.1f}%")
 
-
-    st.markdown("##  Credit Risk Assessment")
+    st.markdown("## Credit Risk Assessment")
     icon = {"LOW": "🟢", "MODERATE": "🟠", "HIGH": "🔴"}
     st.markdown(f"### {icon[risk_output['overall_risk']]} {risk_output['overall_risk']} RISK")
 
@@ -231,13 +228,13 @@ if st.session_state.analysis_done:
             mime="application/pdf",
         )
 
-    
-
-    st.markdown("###  Audit Trail")
+    st.markdown("### Audit Trail")
     audit_df = pd.DataFrame(
         {
             "Metric": OVERRIDABLE_FIELDS,
-            "Extracted": [extracted.get(k, 0) for k in OVERRIDABLE_FIELDS],
+            "Extracted": [
+                metrics_raw.get(k, {}).get("value", 0) for k in OVERRIDABLE_FIELDS
+            ],
             "Adjusted": [financials.get(k, 0) for k in OVERRIDABLE_FIELDS],
         }
     )
