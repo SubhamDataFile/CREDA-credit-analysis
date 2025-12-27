@@ -29,6 +29,11 @@ STATEMENT_HEADERS = {
     ],
 }
 
+STOP_HEADERS = [
+    "notes to the consolidated financial statements",
+    "notes forming part",
+]
+
 
 
 def parse_number(text):
@@ -50,65 +55,103 @@ def scan_pages(pdf):
     ]
 
 
-def find_statement_pages(pages, headers):
-    return [p["page"] for p in pages if any(h in p["text"] for h in headers)]
 
-
-
-def extract_text_values(pdf, pages, label_map, statement_name, diagnostics):
+def detect_consolidated_statement_blocks(pages):
     """
-    Phase 1 extraction:
-    - Statement locked
-    - Provenance aware
-    - Confidence + warnings
+    Detect consolidated statement blocks including continuation pages.
+    Explicitly ignores standalone statements.
     """
-    results = {}
+    blocks = {}
+    current = None
 
     for p in pages:
-        text = pdf.pages[p].extract_text()
-        if not text:
+        text = p["text"]
+
+       
+        if "standalone" in text:
+            current = None
             continue
 
-        diagnostics["pages_scanned"].add(p + 1)
+        if any(h in text for h in STATEMENT_HEADERS["balance_sheet"]):
+            current = "Balance Sheet"
+            blocks[current] = []
 
-        for line in text.split("\n"):
-            line_l = line.lower()
+        elif any(h in text for h in STATEMENT_HEADERS["profit_loss"]):
+            current = "Profit & Loss"
+            blocks[current] = []
 
-            for metric, keys in label_map.items():
-                if metric in results:
-                    continue
+        if current:
+            if any(stop in text for stop in STOP_HEADERS):
+                current = None
+            else:
+                blocks[current].append(p["page"])
 
-                if any(k in line_l for k in keys):
-                    warnings = []
-                    confidence = 0.8  # base confidence
+    return blocks
 
-                    # Unit contamination detection
-                    if "nos" in line_l or "units" in line_l:
-                        warnings.append("Unit-based row (Nos/Units)")
-                        confidence -= 0.3
 
-                    numbers = re.findall(r"\(?\d[\d,]*\)?", line)
-                    if not numbers:
-                        warnings.append("Label matched but no numeric value found")
-                        confidence = 0.0
-                        continue
 
-                    value = parse_number(numbers[-1])  # rightmost = latest year
-                    if value is None:
-                        warnings.append("Numeric parsing failed")
-                        confidence = 0.0
-                        continue
+def detect_year_columns(table):
+    year_cols = {}
+    header = table[0]
 
+    for idx, cell in enumerate(header):
+        if not cell:
+            continue
+        match = re.search(r"(20\d{2})", str(cell))
+        if match:
+            year_cols[match.group(1)] = idx
+
+    return year_cols
+
+
+def extract_from_table(
+    table, label_map, target_year, statement, page_no, diagnostics
+):
+    results = {}
+
+    year_cols = detect_year_columns(table)
+    if not year_cols:
+        return results
+
+   
+    year = max(year_cols.keys())
+    col_idx = year_cols[year]
+
+    for row in table[1:]:
+        if not row or not row[0]:
+            continue
+
+        label = str(row[0]).lower()
+
+        for metric, keys in label_map.items():
+            if metric in results:
+                continue
+
+            if any(k in label for k in keys):
+                raw = row[col_idx]
+                value = parse_number(str(raw))
+
+               
+                if value is None or abs(value) < 1000:
+                    results[metric] = {
+                        "value": None,
+                        "statement": statement,
+                        "page": page_no,
+                        "method": "table-column",
+                        "confidence": 0.0,
+                        "warnings": ["Ambiguous or invalid numeric value"],
+                    }
+                else:
                     results[metric] = {
                         "value": value,
-                        "statement": statement_name,
-                        "page": p + 1,
-                        "method": "regex-row",
-                        "confidence": round(max(confidence, 0.0), 2),
-                        "warnings": warnings,
+                        "statement": statement,
+                        "page": page_no,
+                        "method": "table-column",
+                        "confidence": 0.95,
+                        "warnings": [],
                     }
 
-                    diagnostics["metrics_extracted"][metric] = results[metric]
+                diagnostics["metrics_extracted"][metric] = results[metric]
 
     return results
 
@@ -126,37 +169,54 @@ def run_financial_analysis(pdf_path):
 
     with pdfplumber.open(pdf_path) as pdf:
         pages = scan_pages(pdf)
+        blocks = detect_consolidated_statement_blocks(pages)
 
-        bs_pages = find_statement_pages(
-            pages, STATEMENT_HEADERS["balance_sheet"]
-        )
-        pl_pages = find_statement_pages(
-            pages, STATEMENT_HEADERS["profit_loss"]
-        )
-
+       
+        bs_pages = blocks.get("Balance Sheet", [])
         diagnostics["statements_detected"]["Balance Sheet"] = {
             "detected": bool(bs_pages),
             "pages": [p + 1 for p in bs_pages],
         }
 
+        for p in bs_pages:
+            diagnostics["pages_scanned"].add(p + 1)
+            tables = pdf.pages[p].extract_tables() or []
+
+            for table in tables:
+                metrics.update(
+                    extract_from_table(
+                        table,
+                        BS_LABELS,
+                        None,
+                        "Balance Sheet",
+                        p + 1,
+                        diagnostics,
+                    )
+                )
+
+       
+        pl_pages = blocks.get("Profit & Loss", [])
         diagnostics["statements_detected"]["Profit & Loss"] = {
             "detected": bool(pl_pages),
             "pages": [p + 1 for p in pl_pages],
         }
 
-        metrics.update(
-            extract_text_values(
-                pdf, bs_pages, BS_LABELS, "Balance Sheet", diagnostics
-            )
-        )
+        for p in pl_pages:
+            diagnostics["pages_scanned"].add(p + 1)
+            tables = pdf.pages[p].extract_tables() or []
 
-        metrics.update(
-            extract_text_values(
-                pdf, pl_pages, PL_LABELS, "Profit & Loss", diagnostics
-            )
-        )
+            for table in tables:
+                metrics.update(
+                    extract_from_table(
+                        table,
+                        PL_LABELS,
+                        None,
+                        "Profit & Loss",
+                        p + 1,
+                        diagnostics,
+                    )
+                )
 
-    
 
     for k in ["Total Debt", "Principal Repayment"]:
         if k not in metrics:
@@ -167,6 +227,7 @@ def run_financial_analysis(pdf_path):
                 "warnings": ["Defaulted to zero"],
             }
 
+    
 
     def v(key):
         return metrics.get(key, {}).get("value", 0.0)
@@ -185,7 +246,6 @@ def run_financial_analysis(pdf_path):
         "warnings": [],
     }
 
-   
 
     ca, cl = v("Current Assets"), v("Current Liabilities")
     nw, td = v("Net Worth"), v("Total Debt")
