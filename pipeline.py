@@ -130,27 +130,19 @@ def extract_from_table(table, label_map, statement, page_no, diagnostics):
                 if (value is None or abs(value) < 1000) and metric == "Net Profit":
                     if i + 2 < len(table):
                         next_row = table[i + 2]
-                        raw_next = next_row[col_idx]
-                        value = parse_number(str(raw_next))
+                        value = parse_number(str(next_row[col_idx]))
 
                 if value is None or abs(value) < 1000:
-                    results[metric] = {
-                        "value": None,
-                        "statement": statement,
-                        "page": page_no,
-                        "method": "table-column",
-                        "confidence": 0.0,
-                        "warnings": ["Ambiguous or invalid numeric value"],
-                    }
-                else:
-                    results[metric] = {
-                        "value": value,
-                        "statement": statement,
-                        "page": page_no,
-                        "method": "table-column",
-                        "confidence": 0.95,
-                        "warnings": [],
-                    }
+                    continue
+
+                results[metric] = {
+                    "value": value,
+                    "statement": statement,
+                    "page": page_no,
+                    "method": "table-column",
+                    "confidence": 0.95,
+                    "warnings": [],
+                }
 
                 diagnostics["metrics_extracted"][metric] = results[metric]
 
@@ -187,10 +179,9 @@ def extract_regex_fallback(pdf, pages, label_map, statement, diagnostics):
                     if not values:
                         continue
 
-                    if metric in ["Revenue", "Total Assets", "Current Assets"]:
-                        value = max(values)
-                    else:
-                        value = values[-2] if len(values) >= 2 else values[-1]
+                    value = max(values) if metric in ["Revenue", "Total Assets"] else (
+                        values[-2] if len(values) >= 2 else values[-1]
+                    )
 
                     results[metric] = {
                         "value": value,
@@ -198,7 +189,7 @@ def extract_regex_fallback(pdf, pages, label_map, statement, diagnostics):
                         "page": p + 1,
                         "method": "regex-fallback",
                         "confidence": 0.6,
-                        "warnings": ["Table extraction failed; regex fallback used"],
+                        "warnings": ["Metric-level regex fallback"],
                     }
 
                     diagnostics["metrics_extracted"][metric] = results[metric]
@@ -227,42 +218,50 @@ def run_financial_analysis(pdf_path):
             "pages": [p + 1 for p in bs_pages],
         }
 
-        extracted_bs = {}
         for p in bs_pages:
             diagnostics["pages_scanned"].add(p + 1)
             for table in pdf.pages[p].extract_tables() or []:
-                extracted_bs.update(
+                metrics.update(
                     extract_from_table(table, BS_LABELS, "Balance Sheet", p + 1, diagnostics)
                 )
 
-        if not extracted_bs:
-            diagnostics["warnings"].append("Balance Sheet table extraction failed; regex fallback used")
-            extracted_bs = extract_regex_fallback(pdf, bs_pages, BS_LABELS, "Balance Sheet", diagnostics)
+    
+        missing_bs = {
+            k: BS_LABELS[k] for k in BS_LABELS
+            if k not in metrics or not metrics[k]["value"]
+        }
+        if missing_bs:
+            diagnostics["warnings"].append("Balance Sheet metric-level fallback used")
+            metrics.update(
+                extract_regex_fallback(pdf, bs_pages, missing_bs, "Balance Sheet", diagnostics)
+            )
 
-        metrics.update(extracted_bs)
-
-        
+    
         pl_pages = blocks.get("Profit & Loss", [])
         diagnostics["statements_detected"]["Profit & Loss"] = {
             "detected": bool(pl_pages),
             "pages": [p + 1 for p in pl_pages],
         }
 
-        extracted_pl = {}
         for p in pl_pages:
             diagnostics["pages_scanned"].add(p + 1)
             for table in pdf.pages[p].extract_tables() or []:
-                extracted_pl.update(
+                metrics.update(
                     extract_from_table(table, PL_LABELS, "Profit & Loss", p + 1, diagnostics)
                 )
 
-        if not extracted_pl:
-            diagnostics["warnings"].append("P&L table extraction failed; regex fallback used")
-            extracted_pl = extract_regex_fallback(pdf, pl_pages, PL_LABELS, "Profit & Loss", diagnostics)
+     
+        missing_pl = {
+            k: PL_LABELS[k] for k in PL_LABELS
+            if k not in metrics or not metrics[k]["value"]
+        }
+        if missing_pl:
+            diagnostics["warnings"].append("P&L metric-level fallback used")
+            metrics.update(
+                extract_regex_fallback(pdf, pl_pages, missing_pl, "Profit & Loss", diagnostics)
+            )
 
-        metrics.update(extracted_pl)
-
-    
+  
     for k in ["Total Debt", "Principal Repayment"]:
         metrics.setdefault(k, {
             "value": 0.0,
@@ -271,27 +270,23 @@ def run_financial_analysis(pdf_path):
             "warnings": ["Defaulted to zero"],
         })
 
-    
     def v(k): return metrics.get(k, {}).get("value", 0.0)
 
     metrics["EBIT"] = {"value": v("PBT") + v("Interest Expense"), "statement": "Derived", "confidence": 0.9, "warnings": []}
     metrics["EBITDA"] = {"value": metrics["EBIT"]["value"] + v("Depreciation"), "statement": "Derived", "confidence": 0.9, "warnings": []}
 
-    
     ca, cl = v("Current Assets"), v("Current Liabilities")
     nw, td = v("Net Worth"), v("Total Debt")
     ta = v("Total Assets") or (nw + td)
-    np = v("Net Profit")
-    ebit, ebitda = v("EBIT"), v("EBITDA")
-    interest, principal = v("Interest Expense"), v("Principal Repayment")
 
     ratios = {
         "Current Ratio": ca / cl if cl else None,
         "Debt-Equity Ratio": td / nw if nw else None,
-        "Interest Coverage Ratio": ebit / interest if interest else None,
-        "DSCR": ebitda / (interest + principal) if (interest + principal) else None,
-        "ROCE": ebit / (nw + td) if (nw + td) else None,
-        "ROA": np / ta if ta else None,
+        "Interest Coverage Ratio": v("EBIT") / v("Interest Expense") if v("Interest Expense") else None,
+        "DSCR": v("EBITDA") / (v("Interest Expense") + v("Principal Repayment"))
+        if (v("Interest Expense") + v("Principal Repayment")) else None,
+        "ROCE": v("EBIT") / (nw + td) if (nw + td) else None,
+        "ROA": v("Net Profit") / ta if ta else None,
     }
 
     return {"metrics": metrics, "ratios": ratios, "diagnostics": diagnostics}
