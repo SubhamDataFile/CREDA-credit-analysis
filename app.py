@@ -114,7 +114,9 @@ if uploaded_file:
     if st.button("Run Credit Analysis"):
         with st.spinner("Extracting financials..."):
             result = run_financial_analysis(file_path)
-
+        st.write("DEBUG – full result:", result)
+        st.stop()
+        
         st.session_state.metrics_raw = result["metrics"]
         st.session_state.diagnostics = result["diagnostics"]
         st.session_state.analysis_done = True
