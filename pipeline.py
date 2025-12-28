@@ -230,8 +230,6 @@ def run_financial_analysis(pdf_path):
         "ROA": v("Net Profit") / ta if ta else None,
     }
 
-    print("DEBUG ROCE (raw):", ratios["ROCE"])
-    print("DEBUG EBIT:", v("EBIT"))
-    print("DEBUG Capital Employed:", capital_employed)
+    
 
     return {"metrics": metrics, "ratios": ratios, "diagnostics": diagnostics}
