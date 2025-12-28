@@ -59,18 +59,33 @@ def parse_number(text):
 
 
 def extract_numbers_from_line(text):
-    matches = re.findall(r"\(?₹?\s?[\d,]+(?:\.\d+)?\)?", text)
+    matches = re.findall(r"\(?₹?\s*[\d,]+(?:\.\d+)?\)?", text)
+
     values = []
     for m in matches:
-        neg = "(" in m and ")" in m
-        num = float(
+        cleaned = (
             m.replace("₹", "")
              .replace(",", "")
              .replace("(", "")
              .replace(")", "")
+             .strip()
         )
-        values.append(-num if neg else num)
+
+        if not cleaned:
+            continue
+
+        try:
+            num = float(cleaned)
+        except ValueError:
+            continue
+
+        if "(" in m and ")" in m:
+            num = -num
+
+        values.append(num)
+
     return values
+
 
 
 def scan_pages(pdf):
