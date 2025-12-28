@@ -109,11 +109,11 @@ def detect_consolidated_statement_blocks(pages):
 
         if any(h in text for h in STATEMENT_HEADERS["balance_sheet"]):
             current = "Balance Sheet"
-            blocks[current] = []
+            blocks.setdefault(current, [])
 
         elif any(h in text for h in STATEMENT_HEADERS["profit_loss"]):
             current = "Profit & Loss"
-            blocks[current] = []
+            blocks.setdefault(current, [])
 
         if current:
             if any(stop in text for stop in STOP_HEADERS):
