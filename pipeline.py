@@ -13,8 +13,7 @@ PL_LABELS = {
 NET_PROFIT_ANCHORS = [
     "profit after tax",
     "profit for the year",
-    "total comprehensive income",
-    "attributable to owners",
+    "total comprehensive income",    
 ]
 
 BS_ANCHORS = {
@@ -137,7 +136,10 @@ def extract_semantic_block_value(lines, anchor_phrases, window=4):
                 candidates.extend(extract_numbers_from_line(blk))
 
     candidates = [v for v in candidates if abs(v) >= 1000]
-    return max(candidates) if candidates else 0
+    if not candidates:
+      return 0
+
+    return candidates[0]
 
 
 def extract_metrics_from_text(pdf, pages, label_map, statement, diagnostics):
@@ -233,6 +235,35 @@ def run_financial_analysis(pdf_path):
                 "confidence": 0.95,
                 "warnings": [],
             }
+
+            
+
+            ta = metrics.get("Total Assets", {}).get("value", 0)
+            nw = metrics.get("Net Worth", {}).get("value", 0)
+            ca = metrics.get("Current Assets", {}).get("value", 0)
+            cl = metrics.get("Current Liabilities", {}).get("value", 0)
+
+
+            if nw > ta and ta > 0:
+               diagnostics["warnings"].append(
+                 "Net Worth exceeds Total Assets — invalid, resetting Net Worth"
+               )
+               metrics["Net Worth"]["value"] = 0
+
+
+            if ca > ta and ta > 0:
+               diagnostics["warnings"].append(
+                "Current Assets exceed Total Assets — invalid, resetting Current Assets"
+               )
+               metrics["Current Assets"]["value"] = 0
+
+
+            if cl > ta and ta > 0:
+               diagnostics["warnings"].append(
+                "Current Liabilities exceed Total Assets — invalid, resetting Current Liabilities"
+               )
+               metrics["Current Liabilities"]["value"] = 0
+
 
  
 
