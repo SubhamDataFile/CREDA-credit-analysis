@@ -13,14 +13,14 @@ PL_LABELS = {
 NET_PROFIT_ANCHORS = [
     "profit after tax",
     "profit for the year",
-    "total comprehensive income",    
+    "total comprehensive income for the year",
 ]
 
 BS_ANCHORS = {
     "Net Worth": [
-        "total equity",
-        "equity attributable to owners",
+        "total equity attributable to equity holders",
         "total equity attributable",
+        "total equity",
     ],
     "Total Assets": ["total assets"],
     "Current Assets": ["total current assets"],
@@ -45,22 +45,10 @@ STOP_HEADERS = [
 
 
 
-def parse_number(text):
-    if not isinstance(text, str):
-        return None
-    text = text.replace(",", "").strip()
-    if text.startswith("(") and text.endswith(")"):
-        text = "-" + text[1:-1]
-    try:
-        return float(text)
-    except:
-        return None
-
-
 def extract_numbers_from_line(text):
     matches = re.findall(r"\(?₹?\s*[\d,]+(?:\.\d+)?\)?", text)
-
     values = []
+
     for m in matches:
         cleaned = (
             m.replace("₹", "")
@@ -69,22 +57,17 @@ def extract_numbers_from_line(text):
              .replace(")", "")
              .strip()
         )
-
         if not cleaned:
             continue
-
         try:
             num = float(cleaned)
         except ValueError:
             continue
-
         if "(" in m and ")" in m:
             num = -num
-
         values.append(num)
 
     return values
-
 
 
 def scan_pages(pdf):
@@ -92,7 +75,6 @@ def scan_pages(pdf):
         {"page": i, "text": (p.extract_text() or "").lower()}
         for i, p in enumerate(pdf.pages)
     ]
-
 
 
 def detect_consolidated_statement_blocks(pages):
@@ -128,18 +110,12 @@ def extract_semantic_block_value(lines, anchor_phrases, window=4):
     candidates = []
 
     for i, line in enumerate(lines):
-        l = line.lower()
-        if any(anchor in l for anchor in anchor_phrases):
-            start = max(0, i - window)
-            end = min(len(lines), i + window + 1)
-            for blk in lines[start:end]:
+        if any(anchor in line.lower() for anchor in anchor_phrases):
+            for blk in lines[i:i + window + 1]:
                 candidates.extend(extract_numbers_from_line(blk))
 
     candidates = [v for v in candidates if abs(v) >= 1000]
-    if not candidates:
-      return 0
-
-    return candidates[0]
+    return candidates[0] if candidates else 0
 
 
 def extract_metrics_from_text(pdf, pages, label_map, statement, diagnostics):
@@ -151,25 +127,18 @@ def extract_metrics_from_text(pdf, pages, label_map, statement, diagnostics):
         lines = [l.strip() for l in text.split("\n") if l.strip()]
 
         for i, line in enumerate(lines):
-            line_l = line.lower()
             for metric, keys in label_map.items():
                 if metric in results:
                     continue
-                if any(k in line_l for k in keys):
+                if any(k in line.lower() for k in keys):
                     nums = extract_numbers_from_line(" ".join(lines[i:i + 3]))
                     nums = [v for v in nums if abs(v) >= 1000]
-                    if not nums:
-                        continue
-
-                    results[metric] = {
-                        "value": max(nums),
-                        "statement": statement,
-                        "page": p + 1,
-                        "method": "text-line",
-                        "confidence": 0.9,
-                        "warnings": [],
-                    }
-                    diagnostics["metrics_extracted"][metric] = results[metric]
+                    if nums:
+                        results[metric] = {
+                            "value": max(nums),
+                            "statement": statement,
+                            "method": "text-line",
+                        }
 
     return results
 
@@ -180,7 +149,6 @@ def run_financial_analysis(pdf_path):
     diagnostics = {
         "pages_scanned": set(),
         "statements_detected": {},
-        "metrics_extracted": {},
         "warnings": [],
     }
 
@@ -202,86 +170,63 @@ def run_financial_analysis(pdf_path):
             )
         )
 
-
         def collect_lines(pages):
-            lines = []
+            out = []
             for p in pages:
-                text = pdf.pages[p].extract_text() or ""
-                lines.extend([l.strip() for l in text.split("\n") if l.strip()])
-            return lines
+                out.extend(
+                    [l.strip() for l in (pdf.pages[p].extract_text() or "").split("\n") if l.strip()]
+                )
+            return out
 
         pl_lines = collect_lines(pl_pages)
         bs_lines = collect_lines(bs_pages)
 
-        net_profit = extract_semantic_block_value(pl_lines, NET_PROFIT_ANCHORS)
-        if net_profit == 0:
-            diagnostics["warnings"].append("Net Profit not found via semantic blocks")
         metrics["Net Profit"] = {
-            "value": net_profit,
+            "value": extract_semantic_block_value(pl_lines, NET_PROFIT_ANCHORS),
             "statement": "Profit & Loss",
-            "method": "semantic_block",
-            "confidence": 0.95,
-            "warnings": [],
         }
 
         for metric, anchors in BS_ANCHORS.items():
-            value = extract_semantic_block_value(bs_lines, anchors)
-            if value == 0:
-                diagnostics["warnings"].append(f"{metric} not found via semantic blocks")
             metrics[metric] = {
-                "value": value,
+                "value": extract_semantic_block_value(bs_lines, anchors),
                 "statement": "Balance Sheet",
-                "method": "semantic_block",
-                "confidence": 0.95,
-                "warnings": [],
             }
 
-            
 
-            ta = metrics.get("Total Assets", {}).get("value", 0)
-            nw = metrics.get("Net Worth", {}).get("value", 0)
-            ca = metrics.get("Current Assets", {}).get("value", 0)
-            cl = metrics.get("Current Liabilities", {}).get("value", 0)
+    def v(k): return metrics.get(k, {}).get("value", 0)
 
+    ta = v("Total Assets")
+    nw = v("Net Worth")
+    ca = v("Current Assets")
+    cl = v("Current Liabilities")
 
-            if nw > ta and ta > 0:
-               diagnostics["warnings"].append(
-                 "Net Worth exceeds Total Assets — invalid, resetting Net Worth"
-               )
-               metrics["Net Worth"]["value"] = 0
+    if nw > ta and ta > 0:
+        diagnostics["warnings"].append("Net Worth > Total Assets — reset")
+        metrics["Net Worth"]["value"] = 0
 
+    if ca > ta and ta > 0:
+        diagnostics["warnings"].append("Current Assets > Total Assets — reset")
+        metrics["Current Assets"]["value"] = 0
 
-            if ca > ta and ta > 0:
-               diagnostics["warnings"].append(
-                "Current Assets exceed Total Assets — invalid, resetting Current Assets"
-               )
-               metrics["Current Assets"]["value"] = 0
+    if metrics["Net Profit"]["value"] == v("PBT"):
+        diagnostics["warnings"].append("Net Profit equals PBT — reset")
+        metrics["Net Profit"]["value"] = 0
 
-
-            if cl > ta and ta > 0:
-               diagnostics["warnings"].append(
-                "Current Liabilities exceed Total Assets — invalid, resetting Current Liabilities"
-               )
-               metrics["Current Liabilities"]["value"] = 0
-
-
- 
-
-    def v(k): return metrics.get(k, {}).get("value", 0.0)
-
-    metrics.setdefault("Total Debt", {"value": 0.0})
-    metrics.setdefault("Principal Repayment", {"value": 0.0})
+    metrics.setdefault("Total Debt", {"value": 0})
+    metrics.setdefault("Principal Repayment", {"value": 0})
 
     metrics["EBIT"] = {"value": v("PBT") + v("Interest Expense")}
     metrics["EBITDA"] = {"value": metrics["EBIT"]["value"] + v("Depreciation")}
 
-    ca, cl = v("Current Assets"), v("Current Liabilities")
-    nw, td = v("Net Worth"), v("Total Debt")
-    ta = v("Total Assets") or (nw + td)
+    capital_employed = v("Net Worth") + v("Total Debt")
 
     ratios = {
         "Current Ratio": ca / cl if cl else None,
-        "ROCE": v("EBIT") / (nw + td) if (nw + td) else None,
+        "ROCE": (
+            v("EBIT") / capital_employed
+            if capital_employed > 0.2 * ta
+            else None
+        ),
         "ROA": v("Net Profit") / ta if ta else None,
     }
 
