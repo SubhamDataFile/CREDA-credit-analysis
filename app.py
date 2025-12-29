@@ -38,6 +38,8 @@ OVERRIDABLE_FIELDS = [
     "Total Debt",
     "Interest Expense",
     "Principal Repayment",
+    "EBIT",
+    "Capital Employed"
 ]
 
 
