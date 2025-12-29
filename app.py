@@ -212,6 +212,29 @@ if st.session_state.analysis_done:
     r2.metric("ROCE", "NA" if ratios["ROCE"] is None else f"{ratios['ROCE']*100:.1f}%")
     r3.metric("ROA", "NA" if ratios["ROA"] is None else f"{ratios['ROA']*100:.1f}%")
 
+   
+    st.markdown("## Credit Risk Assessment")
+
+    icon = {"LOW": "🟢", "MODERATE": "🟠", "HIGH": "🔴"}
+    st.markdown(
+      f"### {icon.get(risk_output['overall_risk'], '⚪')} "
+      f"{risk_output['overall_risk']} RISK"
+   )
+
+    if "ratio_flags" in risk_output and risk_output["ratio_flags"]:
+      risk_df = pd.DataFrame(risk_output["ratio_flags"])
+
+    
+      if "value" in risk_df.columns:
+          risk_df["value"] = risk_df["value"].apply(
+            lambda x: "NA" if x is None else round(x, 3)
+        )
+
+      st.dataframe(risk_df, use_container_width=True)
+    else:
+      st.info("No ratio-level risk flags triggered.")
+
+
   
     st.markdown("### Audit Trail")
     audit_df = pd.DataFrame(
