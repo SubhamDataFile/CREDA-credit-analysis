@@ -38,8 +38,6 @@ OVERRIDABLE_FIELDS = [
     "Total Debt",
     "Interest Expense",
     "Principal Repayment",
-    "EBIT",
-    "Capital Employed",
 ]
 
 
@@ -140,8 +138,7 @@ if st.session_state.analysis_done:
         financials.setdefault(field, 0.0)
 
     financials["EBIT"] = financials.get("PBT", 0) + financials.get("Interest Expense", 0)
-    financials["Capital Employed"] = financials.get("Net Worth", 0) + financials.get("Total Debt", 0)
-
+    financials["Capital Employed"] = financials.get("Net Worth", 0) + financials.get("Total Assets", 0) - financials.get("Current Liabilities",0)
     st.markdown("## Analyst Adjustments")
     st.caption("Overrides trigger live recomputation")
 
