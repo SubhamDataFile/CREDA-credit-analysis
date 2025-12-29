@@ -247,6 +247,29 @@ if st.session_state.analysis_done:
     st.dataframe(audit_df, use_container_width=True)
 
    
+    st.markdown("## Credit Memo")
+
+    pdf_path = generate_credit_memo(
+      financials=financials,
+      ratios=ratios,
+      risk_output=risk_output,
+      commentary=commentary,
+      company_name=uploaded_file.name.replace(".pdf", ""),
+      period="FY",
+      logo_path=logo_path,
+      output_path="credit_memo.pdf",
+    )
+
+    with open(pdf_path, "rb") as f:
+      st.download_button(
+        label="📥 Download Credit Memo (PDF)",
+        data=f,
+        file_name="Credit_Memo.pdf",
+        mime="application/pdf",
+    )
+
+
+   
     if st.button("Reset Analysis"):
         st.session_state.clear()
         st.experimental_rerun()
