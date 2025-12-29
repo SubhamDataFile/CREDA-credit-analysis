@@ -74,8 +74,11 @@ def recompute_ratios(f):
     depreciation = f.get("Depreciation", 0)
     interest = f.get("Interest Expense", 0)
     principal = f.get("Principal Repayment", 0)
+    pbt = f.get("PBT", 0)
 
-    ebit = ebitda - depreciation
+    
+    ebit = pbt + interest
+
     capital_employed = nw + td
     debt_service = interest + principal
 
@@ -87,6 +90,7 @@ def recompute_ratios(f):
         "Debt-Equity Ratio": td / nw if nw > 0 else None,
         "Interest Coverage Ratio": ebit / interest if interest > 0 else None,
     }
+
 
 
 
