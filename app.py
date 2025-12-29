@@ -71,27 +71,17 @@ def recompute_ratios(f):
 
     net_profit = f.get("Net Profit", 0)
     ebitda = f.get("EBITDA", 0)
-    depreciation = f.get("Depreciation", 0)
     interest = f.get("Interest Expense", 0)
     principal = f.get("Principal Repayment", 0)
-    pbt = f.get("PBT", 0)
 
-    
-    ebit = pbt + interest
-
-    capital_employed = nw + td
     debt_service = interest + principal
 
     return {
         "DSCR": ebitda / debt_service if debt_service > 0 else None,
-        "ROCE": ebit / capital_employed if capital_employed > 0 else None,
         "ROA": net_profit / ta if ta > 0 else None,
         "Current Ratio": ca / cl if cl > 0 else None,
         "Debt-Equity Ratio": td / nw if nw > 0 else None,
-        "Interest Coverage Ratio": ebit / interest if interest > 0 else None,
     }
-
-
 
 
 uploaded_file = st.file_uploader("Upload Annual Report (PDF)", type=["pdf"])
@@ -155,6 +145,14 @@ if st.session_state.analysis_done:
 
     financials.update(st.session_state.adjusted_financials)
     ratios = recompute_ratios(financials)
+    ebit = financials.get("PBT", 0) + financials.get("Interest Expense", 0)
+    capital_employed = financials.get("Net Worth", 0) + financials.get("Total Debt", 0)
+
+    ratios["ROCE"] = (
+       ebit / capital_employed
+       if capital_employed > 0
+       else None
+    )
 
     risk_output = evaluate_credit_risk(
         ratios=ratios,
