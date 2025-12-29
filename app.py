@@ -249,3 +249,5 @@ if st.session_state.analysis_done:
         st.session_state.analysis_done = False
         st.session_state.adjusted_financials = {}
         st.experimental_rerun()
+
+
