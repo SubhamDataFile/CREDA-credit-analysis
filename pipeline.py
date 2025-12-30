@@ -45,6 +45,28 @@ STOP_HEADERS = [
 
 
 
+def detect_financial_year(pdf):
+    """
+    Detects financial year in the form FY2025, FY2024, etc.
+    Text-first, deterministic, auditable.
+    """
+    patterns = [
+        r"year ended march 31[, ]+(\d{4})",
+        r"for the year ended march 31[, ]+(\d{4})",
+        r"as at march 31[, ]+(\d{4})",
+    ]
+
+    for page in pdf.pages[:5]:  
+        text = (page.extract_text() or "").lower()
+        for p in patterns:
+            m = re.search(p, text)
+            if m:
+                return f"FY{m.group(1)}"
+
+    return "FY_UNKNOWN"
+
+
+
 def extract_numbers_from_line(text):
     matches = re.findall(r"\(?₹?\s*[\d,]+(?:\.\d+)?\)?", text)
     values = []
@@ -105,7 +127,6 @@ def detect_consolidated_statement_blocks(pages):
     return blocks
 
 
-
 def extract_semantic_block_value(lines, anchor_phrases, window=4):
     candidates = []
 
@@ -153,6 +174,8 @@ def run_financial_analysis(pdf_path):
     }
 
     with pdfplumber.open(pdf_path) as pdf:
+        detected_year = detect_financial_year(pdf)
+
         pages = scan_pages(pdf)
         blocks = detect_consolidated_statement_blocks(pages)
 
@@ -184,12 +207,14 @@ def run_financial_analysis(pdf_path):
         metrics["Net Profit"] = {
             "value": extract_semantic_block_value(pl_lines, NET_PROFIT_ANCHORS),
             "statement": "Profit & Loss",
+            "method": "semantic-block",
         }
 
         for metric, anchors in BS_ANCHORS.items():
             metrics[metric] = {
                 "value": extract_semantic_block_value(bs_lines, anchors),
                 "statement": "Balance Sheet",
+                "method": "semantic-block",
             }
 
 
@@ -218,7 +243,7 @@ def run_financial_analysis(pdf_path):
     metrics["EBIT"] = {"value": v("PBT") + v("Interest Expense")}
     metrics["EBITDA"] = {"value": metrics["EBIT"]["value"] + v("Depreciation")}
 
-    capital_employed = v("Net Worth") + v("Total Debt")
+    capital_employed = v("Net Worth") + v("Total Assets") - v("Current Liabilities")
 
     ratios = {
         "Current Ratio": ca / cl if cl else None,
@@ -230,6 +255,9 @@ def run_financial_analysis(pdf_path):
         "ROA": v("Net Profit") / ta if ta else None,
     }
 
-    
-
-    return {"metrics": metrics, "ratios": ratios, "diagnostics": diagnostics}
+    return {
+        "year": detected_year,
+        "metrics": metrics,
+        "ratios": ratios,
+        "diagnostics": diagnostics,
+    }
