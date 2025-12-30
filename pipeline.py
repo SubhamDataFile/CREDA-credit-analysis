@@ -47,23 +47,28 @@ STOP_HEADERS = [
 
 def detect_financial_year(pdf):
     """
-    Detects financial year in the form FY2025, FY2024, etc.
-    Text-first, deterministic, auditable.
+    Robust FY detection for Indian annual reports.
+    Returns FY2025, FY2024, etc.
     """
+
     patterns = [
-        r"year ended march 31[, ]+(\d{4})",
-        r"for the year ended march 31[, ]+(\d{4})",
-        r"as at march 31[, ]+(\d{4})",
+        r"year ended\s+march\s+31[,]?\s*(\d{4})",
+        r"for the year ended\s+march\s+31[,]?\s*(\d{4})",
+        r"for the year ended\s+31\s+march[,]?\s*(\d{4})",
+        r"as at\s+march\s+31[,]?\s*(\d{4})",
+        r"as at\s+31\s+march[,]?\s*(\d{4})",
     ]
 
-    for page in pdf.pages[:5]:  
-        text = (page.extract_text() or "").lower()
+    for page in pdf.pages[:8]:  
+        text = (page.extract_text() or "").lower().replace("\n", " ")
+
         for p in patterns:
-            m = re.search(p, text)
-            if m:
-                return f"FY{m.group(1)}"
+            match = re.search(p, text)
+            if match:
+                return f"FY{match.group(1)}"
 
     return "FY_UNKNOWN"
+
 
 
 
