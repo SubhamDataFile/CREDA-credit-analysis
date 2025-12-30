@@ -43,6 +43,7 @@ OVERRIDABLE_FIELDS = [
 ]
 
 
+# ---------------- STATE ----------------
 if "analysis_by_year" not in st.session_state:
     st.session_state.analysis_by_year = {}
 
@@ -58,9 +59,7 @@ def safe_number(x):
 
 def get_effective_value(financials, key, fallback_fn):
     val = financials.get(key, 0)
-    if val and val > 0:
-        return val
-    return fallback_fn()
+    return val if val > 0 else fallback_fn()
 
 
 def recompute_ratios(financials):
@@ -91,40 +90,39 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True,
 )
 
-logo_path = None
+manual_year = "Auto-detect"
 
 if uploaded_files:
-    os.makedirs("uploads", exist_ok=True)
+    st.markdown("### Financial Year (manual override if auto-detection fails)")
+    manual_year = st.selectbox(
+        "Select Financial Year",
+        ["Auto-detect", "FY2025", "FY2024", "FY2023", "FY2022"],
+    )
 
     st.markdown("### Company Logo (Optional)")
     logo_file = st.file_uploader("Upload Company Logo", type=["png", "jpg", "jpeg"])
+    logo_path = None
 
     if logo_file:
+        os.makedirs("uploads", exist_ok=True)
         logo_path = os.path.join("uploads", "company_logo.png")
         with open(logo_path, "wb") as f:
             f.write(logo_file.getbuffer())
-        st.success("Company logo uploaded")
-
-        st.markdown("### Financial Year (if not auto-detected)")
-        manual_year = st.selectbox(
-                     "Select Financial Year",
-                ["Auto-detect", "FY2025", "FY2024", "FY2023", "FY2022"],
-        )
-
 
     if st.button("Run Credit Analysis"):
         with st.spinner("Running analysis for all uploaded reports..."):
             for file in uploaded_files:
+                os.makedirs("uploads", exist_ok=True)
                 file_path = os.path.join("uploads", file.name)
+
                 with open(file_path, "wb") as f:
                     f.write(file.getbuffer())
 
                 result = run_financial_analysis(file_path)
-                year = result["year"]
 
+                year = result.get("year", "FY_UNKNOWN")
                 if year == "FY_UNKNOWN" and manual_year != "Auto-detect":
-                   year = manual_year
-
+                    year = manual_year
 
                 financials = {
                     k: safe_number(v.get("value"))
@@ -134,9 +132,13 @@ if uploaded_files:
                 for field in OVERRIDABLE_FIELDS:
                     financials.setdefault(field, 0.0)
 
-               
-                financials["EBIT"] = financials.get("PBT", 0) + financials.get("Interest Expense", 0)
-                financials["Capital Employed"] = financials.get("Net Worth", 0) + financials.get("Total Assets", 0) - financials.get("Current Liabilities", 0)
+                financials["EBIT"] = (
+                    financials.get("PBT", 0) + financials.get("Interest Expense", 0)
+                )
+
+                financials["Capital Employed"] = (
+                    financials.get("Net Worth", 0) + financials.get("Total Debt", 0)
+                )
 
                 st.session_state.analysis_by_year[year] = {
                     "metrics_raw": result["metrics"],
@@ -166,7 +168,6 @@ if st.session_state.analysis_done and st.session_state.analysis_by_year:
     with st.expander("Edit Financial Inputs"):
         for field in OVERRIDABLE_FIELDS:
             overrides.setdefault(field, financials.get(field, 0.0))
-
             overrides[field] = st.number_input(
                 field,
                 value=float(overrides[field]),
@@ -181,13 +182,13 @@ if st.session_state.analysis_done and st.session_state.analysis_by_year:
     effective_ebit = get_effective_value(
         financials,
         "EBIT",
-        fallback_fn=lambda: financials.get("PBT", 0) + financials.get("Interest Expense", 0),
+        lambda: financials.get("PBT", 0) + financials.get("Interest Expense", 0),
     )
 
     effective_capital_employed = get_effective_value(
         financials,
         "Capital Employed",
-        fallback_fn=lambda: financials.get("Net Worth", 0) + financials.get("Total Debt", 0),
+        lambda: financials.get("Total Assets", 0) - financials.get("Current Liabilities", 0),
     )
 
     ratios["ROCE"] = (
@@ -204,20 +205,6 @@ if st.session_state.analysis_done and st.session_state.analysis_by_year:
         },
     )
 
-    st.markdown("## Credit Commentary")
-
-    use_ai = st.toggle("Enhance commentary using AI (language only)", value=False)
-
-    commentary = generate_credit_commentary(
-        risk_output=risk_output,
-        ratios=ratios,
-        financials=financials,
-    )
-
-    if use_ai:
-        commentary = polish_credit_commentary(commentary)
-        st.caption("✳ AI enhanced language only. Credit logic unchanged.")
-
     st.markdown("## Credit Snapshot")
     c1, c2, c3 = st.columns(3)
     c1.metric("Revenue", f"₹ {financials['Revenue']:,.0f}")
@@ -230,26 +217,14 @@ if st.session_state.analysis_done and st.session_state.analysis_by_year:
     r2.metric("ROCE", "NA" if ratios["ROCE"] is None else f"{ratios['ROCE']*100:.1f}%")
     r3.metric("ROA", "NA" if ratios["ROA"] is None else f"{ratios['ROA']*100:.1f}%")
 
-    st.markdown("## Credit Risk Assessment")
-    icon = {"LOW": "🟢", "MODERATE": "🟠", "HIGH": "🔴"}
-    st.markdown(f"### {icon[risk_output['overall_risk']]} {risk_output['overall_risk']} RISK")
-
-    if risk_output.get("ratio_flags"):
-        risk_df = pd.DataFrame(risk_output["ratio_flags"])
-        if "value" in risk_df.columns:
-            risk_df["value"] = risk_df["value"].apply(
-                lambda x: "NA" if x is None else round(x, 3)
-            )
-        st.dataframe(risk_df, use_container_width=True)
-
-    st.markdown("## Credit Memo")
-
     pdf_path = generate_credit_memo(
         financials=financials,
         ratios=ratios,
         risk_output=risk_output,
-        commentary=commentary,
-        company_name=f"{selected_year}",
+        commentary=generate_credit_commentary(
+            risk_output=risk_output, ratios=ratios, financials=financials
+        ),
+        company_name=selected_year,
         period=selected_year,
         logo_path=logo_path,
         output_path=f"credit_memo_{selected_year}.pdf",
@@ -263,7 +238,6 @@ if st.session_state.analysis_done and st.session_state.analysis_by_year:
             mime="application/pdf",
         )
 
- 
     st.markdown("### Audit Trail")
     audit_df = pd.DataFrame(
         {
