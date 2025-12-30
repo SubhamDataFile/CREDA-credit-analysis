@@ -16,8 +16,8 @@ st.title("CREDA – AI-Powered Credit Analysis")
 st.caption("Rule-based credit engine with optional AI-assisted commentary")
 
 st.info(
-    "Workflow: Upload annual report → Review extracted figures → "
-    "Adjust key financials if needed → Ratios, risk, and credit memo update live."
+    "Workflow: Upload annual reports → Select financial year → "
+    "Adjust financials → Ratios, risk, and credit memo update live."
 )
 
 st.caption(
@@ -38,20 +38,16 @@ OVERRIDABLE_FIELDS = [
     "Total Debt",
     "Interest Expense",
     "Principal Repayment",
+    "EBIT",
+    "Capital Employed",
 ]
 
 
+if "analysis_by_year" not in st.session_state:
+    st.session_state.analysis_by_year = {}
+
 if "analysis_done" not in st.session_state:
     st.session_state.analysis_done = False
-
-if "metrics_raw" not in st.session_state:
-    st.session_state.metrics_raw = {}
-
-if "diagnostics" not in st.session_state:
-    st.session_state.diagnostics = {}
-
-if "adjusted_financials" not in st.session_state:
-    st.session_state.adjusted_financials = {}
 
 
 def safe_number(x):
@@ -61,11 +57,6 @@ def safe_number(x):
 
 
 def get_effective_value(financials, key, fallback_fn):
-    """
-    Priority:
-    1. Manual override (if > 0)
-    2. Accounting fallback
-    """
     val = financials.get(key, 0)
     if val and val > 0:
         return val
@@ -94,17 +85,16 @@ def recompute_ratios(financials):
     }
 
 
-uploaded_file = st.file_uploader("Upload Annual Report (PDF)", type=["pdf"])
+uploaded_files = st.file_uploader(
+    "Upload Annual Reports (Multiple Years)",
+    type=["pdf"],
+    accept_multiple_files=True,
+)
+
 logo_path = None
 
-if uploaded_file:
+if uploaded_files:
     os.makedirs("uploads", exist_ok=True)
-    file_path = os.path.join("uploads", uploaded_file.name)
-
-    with open(file_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-
-    st.success("Annual report uploaded")
 
     st.markdown("### Company Logo (Optional)")
     logo_file = st.file_uploader("Upload Company Logo", type=["png", "jpg", "jpeg"])
@@ -116,46 +106,64 @@ if uploaded_file:
         st.success("Company logo uploaded")
 
     if st.button("Run Credit Analysis"):
-        with st.spinner("Extracting financials..."):
-            result = run_financial_analysis(file_path)
+        with st.spinner("Running analysis for all uploaded reports..."):
+            for file in uploaded_files:
+                file_path = os.path.join("uploads", file.name)
+                with open(file_path, "wb") as f:
+                    f.write(file.getbuffer())
 
-        st.session_state.metrics_raw = result["metrics"]
-        st.session_state.diagnostics = result["diagnostics"]
+                result = run_financial_analysis(file_path)
+                year = result["year"]
+
+                financials = {
+                    k: safe_number(v.get("value"))
+                    for k, v in result["metrics"].items()
+                }
+
+                for field in OVERRIDABLE_FIELDS:
+                    financials.setdefault(field, 0.0)
+
+               
+                financials["EBIT"] = financials.get("PBT", 0) + financials.get("Interest Expense", 0)
+                financials["Capital Employed"] = financials.get("Net Worth", 0) + financials.get("Total Debt", 0)
+
+                st.session_state.analysis_by_year[year] = {
+                    "metrics_raw": result["metrics"],
+                    "financials": financials,
+                    "overrides": {},
+                    "diagnostics": result["diagnostics"],
+                }
+
         st.session_state.analysis_done = True
-        st.session_state.adjusted_financials = {}
-        st.success("Analysis completed")
+        st.success("Analysis completed for all years")
 
 
-if st.session_state.analysis_done:
-    metrics_raw = st.session_state.metrics_raw
+if st.session_state.analysis_done and st.session_state.analysis_by_year:
 
-    financials = {
-        k: safe_number(v.get("value"))
-        for k, v in metrics_raw.items()
-    }
+    selected_year = st.selectbox(
+        "Select Financial Year",
+        sorted(st.session_state.analysis_by_year.keys(), reverse=True),
+    )
 
-    for field in OVERRIDABLE_FIELDS:
-        financials.setdefault(field, 0.0)
+    current = st.session_state.analysis_by_year[selected_year]
+    metrics_raw = current["metrics_raw"]
+    financials = current["financials"]
+    overrides = current["overrides"]
 
-    financials["EBIT"] = financials.get("PBT", 0) + financials.get("Interest Expense", 0)
-    financials["Capital Employed"] = financials.get("Net Worth", 0) + financials.get("Total Assets", 0) - financials.get("Current Liabilities",0)
     st.markdown("## Analyst Adjustments")
-    st.caption("Overrides trigger live recomputation")
 
     with st.expander("Edit Financial Inputs"):
         for field in OVERRIDABLE_FIELDS:
-            st.session_state.adjusted_financials.setdefault(
-                field, float(financials.get(field, 0.0))
-            )
+            overrides.setdefault(field, financials.get(field, 0.0))
 
-            st.session_state.adjusted_financials[field] = st.number_input(
+            overrides[field] = st.number_input(
                 field,
-                value=st.session_state.adjusted_financials[field],
+                value=float(overrides[field]),
                 step=1.0,
                 format="%.2f",
             )
 
-    financials.update(st.session_state.adjusted_financials)
+    financials.update(overrides)
 
     ratios = recompute_ratios(financials)
 
@@ -199,7 +207,6 @@ if st.session_state.analysis_done:
         commentary = polish_credit_commentary(commentary)
         st.caption("✳ AI enhanced language only. Credit logic unchanged.")
 
-  
     st.markdown("## Credit Snapshot")
     c1, c2, c3 = st.columns(3)
     c1.metric("Revenue", f"₹ {financials['Revenue']:,.0f}")
@@ -212,30 +219,40 @@ if st.session_state.analysis_done:
     r2.metric("ROCE", "NA" if ratios["ROCE"] is None else f"{ratios['ROCE']*100:.1f}%")
     r3.metric("ROA", "NA" if ratios["ROA"] is None else f"{ratios['ROA']*100:.1f}%")
 
-   
     st.markdown("## Credit Risk Assessment")
-
     icon = {"LOW": "🟢", "MODERATE": "🟠", "HIGH": "🔴"}
-    st.markdown(
-      f"### {icon.get(risk_output['overall_risk'], '⚪')} "
-      f"{risk_output['overall_risk']} RISK"
-   )
+    st.markdown(f"### {icon[risk_output['overall_risk']]} {risk_output['overall_risk']} RISK")
 
-    if "ratio_flags" in risk_output and risk_output["ratio_flags"]:
-      risk_df = pd.DataFrame(risk_output["ratio_flags"])
+    if risk_output.get("ratio_flags"):
+        risk_df = pd.DataFrame(risk_output["ratio_flags"])
+        if "value" in risk_df.columns:
+            risk_df["value"] = risk_df["value"].apply(
+                lambda x: "NA" if x is None else round(x, 3)
+            )
+        st.dataframe(risk_df, use_container_width=True)
 
-    
-      if "value" in risk_df.columns:
-          risk_df["value"] = risk_df["value"].apply(
-            lambda x: "NA" if x is None else round(x, 3)
+    st.markdown("## Credit Memo")
+
+    pdf_path = generate_credit_memo(
+        financials=financials,
+        ratios=ratios,
+        risk_output=risk_output,
+        commentary=commentary,
+        company_name=f"{selected_year}",
+        period=selected_year,
+        logo_path=logo_path,
+        output_path=f"credit_memo_{selected_year}.pdf",
+    )
+
+    with open(pdf_path, "rb") as f:
+        st.download_button(
+            " Download Credit Memo (PDF)",
+            data=f,
+            file_name=f"Credit_Memo_{selected_year}.pdf",
+            mime="application/pdf",
         )
 
-      st.dataframe(risk_df, use_container_width=True)
-    else:
-      st.info("No ratio-level risk flags triggered.")
-
-
-  
+ 
     st.markdown("### Audit Trail")
     audit_df = pd.DataFrame(
         {
@@ -246,30 +263,6 @@ if st.session_state.analysis_done:
     )
     st.dataframe(audit_df, use_container_width=True)
 
-   
-    st.markdown("## Credit Memo")
-
-    pdf_path = generate_credit_memo(
-      financials=financials,
-      ratios=ratios,
-      risk_output=risk_output,
-      commentary=commentary,
-      company_name=uploaded_file.name.replace(".pdf", ""),
-      period="FY",
-      logo_path=logo_path,
-      output_path="credit_memo.pdf",
-    )
-
-    with open(pdf_path, "rb") as f:
-      st.download_button(
-        label="📥 Download Credit Memo (PDF)",
-        data=f,
-        file_name="Credit_Memo.pdf",
-        mime="application/pdf",
-    )
-
-
-   
     if st.button("Reset Analysis"):
         st.session_state.clear()
         st.experimental_rerun()
