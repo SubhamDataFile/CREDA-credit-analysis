@@ -105,6 +105,13 @@ if uploaded_files:
             f.write(logo_file.getbuffer())
         st.success("Company logo uploaded")
 
+        st.markdown("### Financial Year (if not auto-detected)")
+        manual_year = st.selectbox(
+                     "Select Financial Year",
+                ["Auto-detect", "FY2025", "FY2024", "FY2023", "FY2022"],
+        )
+
+
     if st.button("Run Credit Analysis"):
         with st.spinner("Running analysis for all uploaded reports..."):
             for file in uploaded_files:
@@ -114,6 +121,10 @@ if uploaded_files:
 
                 result = run_financial_analysis(file_path)
                 year = result["year"]
+
+                if year == "FY_UNKNOWN" and manual_year != "Auto-detect":
+                   year = manual_year
+
 
                 financials = {
                     k: safe_number(v.get("value"))
