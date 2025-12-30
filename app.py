@@ -125,7 +125,7 @@ if uploaded_files:
 
                
                 financials["EBIT"] = financials.get("PBT", 0) + financials.get("Interest Expense", 0)
-                financials["Capital Employed"] = financials.get("Net Worth", 0) + financials.get("Total Debt", 0)
+                financials["Capital Employed"] = financials.get("Net Worth", 0) + financials.get("Total Assets", 0) - financials.get("Current Liabilities", 0)
 
                 st.session_state.analysis_by_year[year] = {
                     "metrics_raw": result["metrics"],
