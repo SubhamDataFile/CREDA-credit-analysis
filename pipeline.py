@@ -248,7 +248,7 @@ def run_financial_analysis(pdf_path):
     metrics["EBIT"] = {"value": v("PBT") + v("Interest Expense")}
     metrics["EBITDA"] = {"value": metrics["EBIT"]["value"] + v("Depreciation")}
 
-    capital_employed = v("Net Worth") + v("Total Assets") - v("Current Liabilities")
+    capital_employed =   v("Total Assets") - v("Current Liabilities")
 
     ratios = {
         "Current Ratio": ca / cl if cl else None,
