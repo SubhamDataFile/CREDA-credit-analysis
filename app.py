@@ -55,9 +55,7 @@ def safe_number(x):
     return float(x)
 
 
-def get_effective_value(financials, key, fallback_fn):
-    val = financials.get(key, 0)
-    return val if val > 0 else fallback_fn()
+
 
 
 def recompute_ratios(financials):
@@ -66,19 +64,21 @@ def recompute_ratios(financials):
     nw = financials.get("Net Worth", 0)
     td = financials.get("Total Debt", 0)
     ta = financials.get("Total Assets", nw + td)
-
+    pbt = financials.get("PBT", 0)
+    
     net_profit = financials.get("Net Profit", 0)
     ebitda = financials.get("EBITDA", 0)
     interest = financials.get("Interest Expense", 0)
     principal = financials.get("Principal Repayment", 0)
-
+    ebit = pbt + interest
     debt_service = interest + principal
-
+    capital_employed = ta - cl
     return {
         "DSCR": ebitda / debt_service if debt_service > 0 else None,
         "ROA": net_profit / ta if ta > 0 else None,
         "Current Ratio": ca / cl if cl > 0 else None,
         "Debt-Equity Ratio": td / nw if nw > 0 else None,
+        "ROCE" : ebit/capital_employed if capital_employed > 0 else None,
     }
 
 
@@ -130,13 +130,7 @@ if uploaded_files:
                 for field in OVERRIDABLE_FIELDS:
                     financials.setdefault(field, 0.0)
 
-                financials["EBIT"] = (
-                    financials.get("PBT", 0) + financials.get("Interest Expense", 0)
-                )
-
-                financials["Capital Employed"] = (
-                    financials.get("Net Worth", 0) + financials.get("Total Debt", 0)
-                )
+                
 
                 st.session_state.analysis_by_year[year] = {
                     "metrics_raw": result["metrics"],
@@ -177,23 +171,8 @@ if st.session_state.analysis_done and st.session_state.analysis_by_year:
 
     ratios = recompute_ratios(financials)
 
-    effective_ebit = get_effective_value(
-        financials,
-        "EBIT",
-        lambda: financials.get("PBT", 0) + financials.get("Interest Expense", 0),
-    )
-
-    effective_capital_employed = get_effective_value(
-        financials,
-        "Capital Employed",
-        lambda: financials.get("Total Assets", 0) - financials.get("Current Liabilities", 0),
-    )
-
-    ratios["ROCE"] = (
-        effective_ebit / effective_capital_employed
-        if effective_capital_employed > 0
-        else None
-    )
+    
+    
 
     risk_output = evaluate_credit_risk(
         ratios=ratios,
