@@ -79,6 +79,7 @@ def recompute_ratios(financials):
         "Current Ratio": ca / cl if cl > 0 else None,
         "Debt-Equity Ratio": td / nw if nw > 0 else None,
         "ROCE" : ebit/capital_employed if capital_employed > 0 else None,
+        "Interest Coverage Ratio" : ebit/interest if interest > 0 else None,
     }
 
 
