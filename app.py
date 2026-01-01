@@ -37,13 +37,11 @@ OVERRIDABLE_FIELDS = [
     "Net Worth",
     "Total Debt",
     "Interest Expense",
-    "Principal Repayment",
-    "EBIT",
-    "Capital Employed",
+    "Principal Repayment",    
 ]
 
 
-# ---------------- STATE ----------------
+
 if "analysis_by_year" not in st.session_state:
     st.session_state.analysis_by_year = {}
 
