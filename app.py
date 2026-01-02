@@ -1,3 +1,5 @@
+import logging
+logging.getLogger("pdfminer").setLevel(logging.ERROR)
 from pipeline import run_financial_analysis
 from risk_engine import evaluate_credit_risk
 from credit_commentary import generate_credit_commentary
@@ -43,10 +45,14 @@ OVERRIDABLE_FIELDS = [
 
 
 if "analysis_by_year" not in st.session_state:
-    st.session_state.analysis_by_year = {}
+    st.session_state["analysis_by_year"] = {}
 
 if "analysis_done" not in st.session_state:
-    st.session_state.analysis_done = False
+    st.session_state["analysis_done"] = False
+
+if "logo_path" not in st.session_state:
+    st.session_state["logo_path"] = None
+
 
 
 def safe_number(x):
@@ -100,11 +106,13 @@ if uploaded_files:
 
     st.markdown("### Company Logo (Optional)")
     logo_file = st.file_uploader("Upload Company Logo", type=["png", "jpg", "jpeg"])
-    logo_path = None
+    logo_path = st.session_state.logo_path
+
 
     if logo_file:
         os.makedirs("uploads", exist_ok=True)
-        logo_path = os.path.join("uploads", "company_logo.png")
+        st.session_state.logo_path = os.path.join("uploads", "company_logo.png")
+        logo_path = st.session_state.logo_path
         with open(logo_path, "wb") as f:
             f.write(logo_file.getbuffer())
 
@@ -122,6 +130,10 @@ if uploaded_files:
                 year = result.get("year", "FY_UNKNOWN")
                 if year == "FY_UNKNOWN" and manual_year != "Auto-detect":
                     year = manual_year
+                
+                if year in st.session_state.analysis_by_year:
+                   year = f"{year}_{len(st.session_state.analysis_by_year)+1}"
+
 
                 financials = {
                     k: safe_number(v.get("value"))
@@ -212,12 +224,13 @@ if st.session_state.analysis_done and st.session_state.analysis_by_year:
             lambda x: "NA" if x is None else round(x, 3)
         )
 
-      st.dataframe(risk_df, use_container_width=True)
+      st.dataframe(risk_df, width="stretch")
     else:
       st.info("No risk flags generated for this analysis.")
 
 
-    pdf_path = generate_credit_memo(
+    try:
+      pdf_path = generate_credit_memo(
         financials=financials,
         ratios=ratios,
         risk_output=risk_output,
@@ -226,11 +239,16 @@ if st.session_state.analysis_done and st.session_state.analysis_by_year:
         ),
         company_name=selected_year,
         period=selected_year,
-        logo_path=logo_path,
+        logo_path=st.session_state.logo_path,
         output_path=f"credit_memo_{selected_year}.pdf",
     )
+    except Exception as e:
+      st.error("Credit memo generation failed.")
+      st.exception(e)
+      pdf_path = None
 
-    with open(pdf_path, "rb") as f:
+    if pdf_path and os.path.exists(pdf_path):
+      with open(pdf_path, "rb") as f:
         st.download_button(
             " Download Credit Memo (PDF)",
             data=f,
@@ -246,8 +264,8 @@ if st.session_state.analysis_done and st.session_state.analysis_by_year:
             "Adjusted": [financials.get(k, 0) for k in OVERRIDABLE_FIELDS],
         }
     )
-    st.dataframe(audit_df, use_container_width=True)
-
+    st.dataframe(audit_df, width="stretch")
     if st.button("Reset Analysis"):
-        st.session_state.clear()
-        st.experimental_rerun()
+        for key in list(st.session_state.keys()):
+           del st.session_state[key]
+        st.rerun()
