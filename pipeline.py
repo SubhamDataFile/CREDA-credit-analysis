@@ -32,13 +32,18 @@ BS_ANCHORS = {
 STATEMENT_HEADERS = {
     "balance_sheet": [
         "consolidated balance sheet",
+        "consolidated balance sheets",
+        "statement of financial position",
         "consolidated statement of financial position",
     ],
     "profit_loss": [
         "consolidated statement of profit and loss",
+        "statement of profit and loss",
+        "statement of profit & loss",
         "consolidated statement of profit",
     ],
 }
+
 
 STOP_HEADERS = [
     "notes to the consolidated financial statements",
@@ -105,6 +110,8 @@ def detect_financial_year(pdf):
                 return f"FY{match.group(1)}"
 
     return "FY_UNKNOWN"
+
+
 
 
 def run_financial_analysis(pdf_path):
@@ -235,6 +242,12 @@ def run_financial_analysis(pdf_path):
         "ROCE": v("EBIT") / capital_employed if capital_employed > 0.2 * ta else None,
         "ROA": v("Net Profit") / ta if ta else None,
     }
+
+    if not fin_pages["Balance Sheet"] and not fin_pages["Profit & Loss"]:
+       diagnostics["warnings"].append(
+         "No consolidated financial statements detected"
+        )
+
 
     return {
         "year": detected_year,
