@@ -1,7 +1,9 @@
 import pdfplumber
 import re
 
-
+MIN_TEXT_CHARS = 120          
+MAX_FIN_PAGES = 40            
+MAX_PREFLIGHT_PAGES = 50     
 
 PL_LABELS = {
     "Revenue": ["revenue from operations", "total income"],
@@ -43,33 +45,10 @@ STOP_HEADERS = [
     "notes forming part",
 ]
 
-
-
-def detect_financial_year(pdf):
-    """
-    Robust FY detection for Indian annual reports.
-    Returns FY2025, FY2024, etc.
-    """
-
-    patterns = [
-        r"year ended\s+march\s+31[,]?\s*(\d{4})",
-        r"for the year ended\s+march\s+31[,]?\s*(\d{4})",
-        r"for the year ended\s+31\s+march[,]?\s*(\d{4})",
-        r"as at\s+march\s+31[,]?\s*(\d{4})",
-        r"as at\s+31\s+march[,]?\s*(\d{4})",
-    ]
-
-    for page in pdf.pages[:8]:  
-        text = (page.extract_text() or "").lower().replace("\n", " ")
-
-        for p in patterns:
-            match = re.search(p, text)
-            if match:
-                return f"FY{match.group(1)}"
-
-    return "FY_UNKNOWN"
-
-
+def is_text_page(text: str) -> bool:
+    if not text:
+        return False
+    return len(text.strip()) >= MIN_TEXT_CHARS
 
 
 def extract_numbers_from_line(text):
@@ -97,41 +76,6 @@ def extract_numbers_from_line(text):
     return values
 
 
-def scan_pages(pdf):
-    return [
-        {"page": i, "text": (p.extract_text() or "").lower()}
-        for i, p in enumerate(pdf.pages)
-    ]
-
-
-def detect_consolidated_statement_blocks(pages):
-    blocks = {}
-    current = None
-
-    for p in pages:
-        text = p["text"]
-
-        if "standalone" in text:
-            current = None
-            continue
-
-        if any(h in text for h in STATEMENT_HEADERS["balance_sheet"]):
-            current = "Balance Sheet"
-            blocks.setdefault(current, [])
-
-        elif any(h in text for h in STATEMENT_HEADERS["profit_loss"]):
-            current = "Profit & Loss"
-            blocks.setdefault(current, [])
-
-        if current:
-            if any(stop in text for stop in STOP_HEADERS):
-                current = None
-            else:
-                blocks[current].append(p["page"])
-
-    return blocks
-
-
 def extract_semantic_block_value(lines, anchor_phrases, window=4):
     candidates = []
 
@@ -144,30 +88,23 @@ def extract_semantic_block_value(lines, anchor_phrases, window=4):
     return candidates[0] if candidates else 0
 
 
-def extract_metrics_from_text(pdf, pages, label_map, statement, diagnostics):
-    results = {}
+def detect_financial_year(pdf):
+    patterns = [
+        r"year ended\s+march\s+31[,]?\s*(\d{4})",
+        r"for the year ended\s+march\s+31[,]?\s*(\d{4})",
+        r"for the year ended\s+31\s+march[,]?\s*(\d{4})",
+        r"as at\s+march\s+31[,]?\s*(\d{4})",
+        r"as at\s+31\s+march[,]?\s*(\d{4})",
+    ]
 
-    for p in pages:
-        text = pdf.pages[p].extract_text() or ""
-        diagnostics["pages_scanned"].add(p + 1)
-        lines = [l.strip() for l in text.split("\n") if l.strip()]
+    for page in pdf.pages[:8]:
+        text = (page.extract_text() or "").lower().replace("\n", " ")
+        for p in patterns:
+            match = re.search(p, text)
+            if match:
+                return f"FY{match.group(1)}"
 
-        for i, line in enumerate(lines):
-            for metric, keys in label_map.items():
-                if metric in results:
-                    continue
-                if any(k in line.lower() for k in keys):
-                    nums = extract_numbers_from_line(" ".join(lines[i:i + 3]))
-                    nums = [v for v in nums if abs(v) >= 1000]
-                    if nums:
-                        results[metric] = {
-                            "value": max(nums),
-                            "statement": statement,
-                            "method": "text-line",
-                        }
-
-    return results
-
+    return "FY_UNKNOWN"
 
 
 def run_financial_analysis(pdf_path):
@@ -181,39 +118,82 @@ def run_financial_analysis(pdf_path):
     with pdfplumber.open(pdf_path) as pdf:
         detected_year = detect_financial_year(pdf)
 
-        pages = scan_pages(pdf)
-        blocks = detect_consolidated_statement_blocks(pages)
+        inside_financials = False
+        current_statement = None
+        fin_pages = {"Balance Sheet": [], "Profit & Loss": []}
+        pages_processed = 0
 
-        bs_pages = blocks.get("Balance Sheet", [])
-        pl_pages = blocks.get("Profit & Loss", [])
+      
+        for i, page in enumerate(pdf.pages):
 
-        diagnostics["statements_detected"] = {
-            "Balance Sheet": bs_pages,
-            "Profit & Loss": pl_pages,
-        }
+           
+            if not inside_financials and i > MAX_PREFLIGHT_PAGES:
+                break
 
-        metrics.update(
-            extract_metrics_from_text(
-                pdf, pl_pages, PL_LABELS, "Profit & Loss", diagnostics
-            )
-        )
+            raw_text = page.extract_text()
+            if not is_text_page(raw_text):
+                continue
+
+            text = raw_text.lower()
+            diagnostics["pages_scanned"].add(i + 1)
+
+          
+            if inside_financials and any(h in text for h in STOP_HEADERS):
+                break
+
+            
+            if any(h in text for h in STATEMENT_HEADERS["balance_sheet"]):
+                inside_financials = True
+                current_statement = "Balance Sheet"
+
+            elif any(h in text for h in STATEMENT_HEADERS["profit_loss"]):
+                inside_financials = True
+                current_statement = "Profit & Loss"
+
+            if not inside_financials:
+                continue
+
+            fin_pages[current_statement].append(i)
+            pages_processed += 1
+
+            if pages_processed >= MAX_FIN_PAGES:
+                break
+
+        diagnostics["statements_detected"] = fin_pages
 
         def collect_lines(pages):
             out = []
             for p in pages:
-                out.extend(
-                    [l.strip() for l in (pdf.pages[p].extract_text() or "").split("\n") if l.strip()]
-                )
+                txt = pdf.pages[p].extract_text() or ""
+                out.extend([l.strip() for l in txt.split("\n") if l.strip()])
             return out
 
+        pl_pages = fin_pages["Profit & Loss"]
         pl_lines = collect_lines(pl_pages)
-        bs_lines = collect_lines(bs_pages)
+
+        for metric, keys in PL_LABELS.items():
+            for line in pl_lines:
+                if metric in metrics:
+                    break
+                if any(k in line.lower() for k in keys):
+                    nums = extract_numbers_from_line(line)
+                    nums = [v for v in nums if abs(v) >= 1000]
+                    if nums:
+                        metrics[metric] = {
+                            "value": max(nums),
+                            "statement": "Profit & Loss",
+                            "method": "text-line",
+                        }
 
         metrics["Net Profit"] = {
             "value": extract_semantic_block_value(pl_lines, NET_PROFIT_ANCHORS),
             "statement": "Profit & Loss",
             "method": "semantic-block",
         }
+
+       
+        bs_pages = fin_pages["Balance Sheet"]
+        bs_lines = collect_lines(bs_pages)
 
         for metric, anchors in BS_ANCHORS.items():
             metrics[metric] = {
@@ -222,7 +202,7 @@ def run_financial_analysis(pdf_path):
                 "method": "semantic-block",
             }
 
-
+   
     def v(k): return metrics.get(k, {}).get("value", 0)
 
     ta = v("Total Assets")
@@ -248,15 +228,11 @@ def run_financial_analysis(pdf_path):
     metrics["EBIT"] = {"value": v("PBT") + v("Interest Expense")}
     metrics["EBITDA"] = {"value": metrics["EBIT"]["value"] + v("Depreciation")}
 
-    capital_employed =   v("Total Assets") - v("Current Liabilities")
+    capital_employed = ta - cl
 
     ratios = {
         "Current Ratio": ca / cl if cl else None,
-        "ROCE": (
-            v("EBIT") / capital_employed
-            if capital_employed > 0.2 * ta
-            else None
-        ),
+        "ROCE": v("EBIT") / capital_employed if capital_employed > 0.2 * ta else None,
         "ROA": v("Net Profit") / ta if ta else None,
     }
 
