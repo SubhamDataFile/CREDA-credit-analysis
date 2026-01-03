@@ -50,6 +50,15 @@ STOP_HEADERS = [
     "notes forming part",
 ]
 
+
+FIN_SECTION_ANCHORS = [
+    "annual accounts",
+    "financial statements",
+    "standalone and consolidated financial statements",
+    "consolidated financial statements",
+    "financial section",
+]
+
 def contains_any(text, phrases):
     return any(p in text for p in phrases)
 
@@ -115,7 +124,6 @@ def detect_financial_year(pdf):
 
     return "FY_UNKNOWN"
 
-
 def run_financial_analysis(pdf_path):
     metrics = {}
     diagnostics = {
@@ -127,25 +135,40 @@ def run_financial_analysis(pdf_path):
     with pdfplumber.open(pdf_path) as pdf:
         detected_year = detect_financial_year(pdf)
 
+        start_page = 0
+        found_fin_section = False
+
+        for i, page in enumerate(pdf.pages[:200]):  
+            text = (page.extract_text() or "").lower()
+            if any(a in text for a in FIN_SECTION_ANCHORS):
+                start_page = i
+                found_fin_section = True
+                break
+
+        if not found_fin_section:
+            diagnostics["warnings"].append(
+                "Financial statements section not found (using full scan)"
+            )
+            start_page = 0
+
         inside_financials = False
         current_statement = None
         fin_pages = {"Balance Sheet": [], "Profit & Loss": []}
         pages_processed = 0
 
-        for i, page in enumerate(pdf.pages):
+        for i in range(start_page, len(pdf.pages)):
 
-            if not inside_financials and i > MAX_PREFLIGHT_PAGES:
+            if not inside_financials and (i - start_page) > MAX_PREFLIGHT_PAGES:
                 break
 
+            page = pdf.pages[i]
             raw_text = page.extract_text()
             if not is_text_page(raw_text):
                 continue
 
             diagnostics["pages_scanned"].add(i + 1)
-
             text = raw_text.lower()
 
-   
             if inside_financials and any(h in text for h in STOP_HEADERS):
                 break
 
@@ -157,7 +180,6 @@ def run_financial_analysis(pdf_path):
                         inside_financials = True
                         current_statement = "Balance Sheet"
                         break
-
                     if contains_any(line, STATEMENT_HEADERS["profit_loss"]):
                         inside_financials = True
                         current_statement = "Profit & Loss"
@@ -174,7 +196,6 @@ def run_financial_analysis(pdf_path):
 
         diagnostics["statements_detected"] = fin_pages
 
-
         def collect_lines(pages):
             out = []
             for p in pages:
@@ -182,7 +203,6 @@ def run_financial_analysis(pdf_path):
                 out.extend([l.strip() for l in txt.split("\n") if l.strip()])
             return out
 
-     
         pl_pages = fin_pages["Profit & Loss"]
         pl_lines = collect_lines(pl_pages)
 
@@ -206,7 +226,6 @@ def run_financial_analysis(pdf_path):
             "method": "semantic-block",
         }
 
-       
         bs_pages = fin_pages["Balance Sheet"]
         bs_lines = collect_lines(bs_pages)
 
@@ -216,7 +235,6 @@ def run_financial_analysis(pdf_path):
                 "statement": "Balance Sheet",
                 "method": "semantic-block",
             }
-
 
     def v(k): return metrics.get(k, {}).get("value", 0)
 
