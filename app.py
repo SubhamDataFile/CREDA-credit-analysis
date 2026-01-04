@@ -222,6 +222,18 @@ if st.session_state.analysis_done and st.session_state.analysis_by_year:
         f"{risk_output['overall_risk']} RISK"
     )
 
+    if risk_output.get("ratio_flags"):
+       risk_df = pd.DataFrame(risk_output["ratio_flags"])
+
+       if "value" in risk_df.columns:
+           risk_df["value"] = risk_df["value"].apply(
+            lambda x: "NA" if x is None else round(x, 3)
+           )
+
+       st.dataframe(risk_df, use_container_width=True)
+    else:
+       st.info("No risk flags generated for this analysis.")
+
     try:
         pdf_path = generate_credit_memo(
             financials=financials,
@@ -251,6 +263,16 @@ if st.session_state.analysis_done and st.session_state.analysis_by_year:
                 mime="application/pdf",
             )
 
+    st.markdown("### Audit Trail")
+    audit_df = pd.DataFrame(
+       {
+            "Metric": OVERRIDABLE_FIELDS,
+            "Extracted": [metrics_raw.get(k, {}).get("value", 0) for k in OVERRIDABLE_FIELDS],
+            "Adjusted": [financials.get(k, 0) for k in OVERRIDABLE_FIELDS],
+       }
+   )
+    st.dataframe(audit_df, use_container_width=True)
+
     st.markdown("## Multi-Year Trend Analysis")
     if len(st.session_state.financials_by_year) < 2:
         st.info("Trend analysis requires at least two financial years.")
@@ -262,3 +284,9 @@ if st.session_state.analysis_done and st.session_state.analysis_by_year:
             st.markdown("No adverse multi-year trends observed.")
 
         st.markdown(f"### Credit Outlook: **{credit_outlook}**")
+
+    
+        if st.button("Reset Analysis"):
+           st.session_state.clear()
+           st.experimental_rerun()    
+    
