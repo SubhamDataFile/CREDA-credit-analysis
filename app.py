@@ -154,7 +154,6 @@ if uploaded_files:
         st.session_state.analysis_done = True
         st.success("Analysis completed for all years")
 
-
 if st.session_state.analysis_done and st.session_state.analysis_by_year:
 
     selected_year = st.selectbox(
@@ -192,15 +191,13 @@ if st.session_state.analysis_done and st.session_state.analysis_by_year:
     st.session_state.ratios_by_year[selected_year] = ratios
     st.session_state.overall_risk_by_year[selected_year] = risk_output["overall_risk"]
 
-    trend_data = trend_flags = trend_commentary = credit_outlook = None
-
+    trend_flags = credit_outlook = None
     if len(st.session_state.financials_by_year) >= 2:
         trend_data = build_trend_block(
             st.session_state.financials_by_year,
             st.session_state.ratios_by_year,
         )
         trend_flags = evaluate_trend_flags(trend_data)
-        trend_commentary = generate_trend_commentary(trend_flags)
         credit_outlook = determine_outlook(
             trend_flags,
             st.session_state.overall_risk_by_year[selected_year],
@@ -220,38 +217,39 @@ if st.session_state.analysis_done and st.session_state.analysis_by_year:
 
     st.markdown("## Credit Risk Assessment")
     icon = {"LOW": "🟢", "MODERATE": "🟠", "HIGH": "🔴"}
-    st.markdown(f"### {icon.get(risk_output['overall_risk'], '⚪')} {risk_output['overall_risk']} RISK")
-
-    
-try:
-    pdf_path = generate_credit_memo(
-        financials=financials,
-        ratios=ratios,
-        risk_output=risk_output,
-        commentary=generate_credit_commentary(
-            risk_output=risk_output,
-            ratios=ratios,
-            financials=financials,
-        ),
-        company_name=selected_year,
-        period=selected_year,
-        logo_path=st.session_state.logo_path,
-        output_path=f"credit_memo_{selected_year}.pdf",
+    st.markdown(
+        f"### {icon.get(risk_output['overall_risk'], '⚪')} "
+        f"{risk_output['overall_risk']} RISK"
     )
-except Exception as e:
-    st.error("Credit memo generation failed.")
-    st.exception(e)
-    pdf_path = None
 
-
-if pdf_path and os.path.exists(pdf_path):
-    with open(pdf_path, "rb") as f:
-        st.download_button(
-            label=" Download Credit Memo (PDF)",
-            data=f,
-            file_name=f"Credit_Memo_{selected_year}.pdf",
-            mime="application/pdf",
+    try:
+        pdf_path = generate_credit_memo(
+            financials=financials,
+            ratios=ratios,
+            risk_output=risk_output,
+            commentary=generate_credit_commentary(
+                risk_output=risk_output,
+                ratios=ratios,
+                financials=financials,
+            ),
+            company_name=selected_year,
+            period=selected_year,
+            logo_path=st.session_state.logo_path,
+            output_path=f"credit_memo_{selected_year}.pdf",
         )
+    except Exception as e:
+        st.error("Credit memo generation failed.")
+        st.exception(e)
+        pdf_path = None
+
+    if pdf_path and os.path.exists(pdf_path):
+        with open(pdf_path, "rb") as f:
+            st.download_button(
+                "📄 Download Credit Memo (PDF)",
+                data=f,
+                file_name=f"Credit_Memo_{selected_year}.pdf",
+                mime="application/pdf",
+            )
 
     st.markdown("## Multi-Year Trend Analysis")
     if len(st.session_state.financials_by_year) < 2:
