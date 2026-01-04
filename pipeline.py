@@ -142,10 +142,7 @@ def run_financial_analysis(pdf_path):
             text = (page.extract_text() or "").lower()
 
            
-            if i in (0, 50, 100, 150, 200, 250):
-              diagnostics["warnings"].append(
-               f"Page {i+1} sample text: {(page.extract_text() or '')[:200]}"
-              )
+            
 
             if any(a in text for a in FIN_SECTION_ANCHORS):
                 start_page = i
