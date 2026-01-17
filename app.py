@@ -1,16 +1,16 @@
 import logging
 logging.getLogger("pdfminer").setLevel(logging.ERROR)
 
-from pipeline import run_financial_analysis
-from risk_engine import evaluate_credit_risk
+from core_engine.pipeline import run_financial_analysis
+from core_engine.risk_engine import evaluate_credit_risk
 from credit_commentary import generate_credit_commentary
 from credit_memo import generate_credit_memo
 from ai_commentary import polish_credit_commentary
 
-from trend_engine.trend_aggregator import build_trend_block
-from trend_engine.trend_flags import evaluate_trend_flags
-from trend_engine.trend_commentary import generate_trend_commentary
-from trend_engine.outlook_engine import determine_outlook
+from core_engine.trend_engine.trend_aggregator import build_trend_block
+from core_engine.trend_engine.trend_flags import evaluate_trend_flags
+from core_engine.trend_engine.trend_commentary import generate_trend_commentary
+from core_engine.trend_engine.outlook_engine import determine_outlook
 
 import pandas as pd
 import streamlit as st
