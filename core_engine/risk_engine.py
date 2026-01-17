@@ -1,4 +1,4 @@
-from risk_thresholds import RISK_THRESHOLDS
+from core_engine.risk_thresholds import RISK_THRESHOLDS
 def classify_ratio(value, cfg):
     if value is None:
         return "AMBER"
